@@ -3,17 +3,23 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { loadCliConfig } from "./config";
-import { runCodex } from "./codex-runner";
+import {
+  executorLabel,
+  runSelectedExecutor,
+  selectExecutor,
+  type ExecutorKey,
+  type ExecutorMode,
+} from "./executor";
 import { OllamaClient, type ChatMessage } from "./ollama";
 
 const SYSTEM_PROMPT = [
-  "あなたはユーザーと一緒に、CodexCLIに渡す実装指示文を作るアシスタントです。",
+  "あなたはユーザーと一緒に、CodexCLIやClaude Codeに渡す実装指示文を作るアシスタントです。",
   "ユーザーの意図を確認し、曖昧な部分は質問し、具体的な手順と完了条件が含まれる指示文へ改善してください。",
   "日本語で簡潔に回答してください。",
 ].join("\n");
 
 const FINALIZER_SYSTEM_PROMPT = [
-  "あなたは会話ログから、CodexCLIへ渡す最終指示文を1つに統合するエディタです。",
+  "あなたは会話ログから、実行器へ渡す最終指示文を1つに統合するエディタです。",
   "出力は最終指示文のみを返してください。",
   "日本語で、目的・要件・制約・完了条件が明確になるように書いてください。",
 ].join("\n");
@@ -29,6 +35,7 @@ const BANNER = String.raw`
 
 type CliState = {
   history: ChatMessage[];
+  executorMode: ExecutorMode;
   latestPromptPath: string | null;
   latestPromptText: string | null;
 };
@@ -54,7 +61,10 @@ function formatHistoryForFinalizer(history: ChatMessage[]): string {
     .join("\n\n");
 }
 
-async function buildFinalPrompt(ollama: OllamaClient, history: ChatMessage[]): Promise<string> {
+async function buildFinalPrompt(
+  ollama: OllamaClient,
+  history: ChatMessage[],
+): Promise<{ prompt: string; historyText: string }> {
   const historyText = formatHistoryForFinalizer(history);
   if (!historyText) {
     throw new Error("会話履歴が空のため、最終指示文を生成できません。");
@@ -65,16 +75,18 @@ async function buildFinalPrompt(ollama: OllamaClient, history: ChatMessage[]): P
     { role: "user", content: historyText },
   ]);
 
-  return prompt;
+  return { prompt, historyText };
 }
 
 function printHelp(): void {
   output.write("\n");
   output.write("コマンド:\n");
   output.write("  /help      ヘルプを表示\n");
+  output.write("  /engine    実行モード表示 (codex / claude / auto)\n");
+  output.write("  /engine X  実行モード変更 (X: codex|claude|auto)\n");
   output.write("  /reset     会話履歴を初期化\n");
   output.write("  /finalize  最終指示文を生成して保存\n");
-  output.write("  /run       最終指示文を生成してCodexCLI実行\n");
+  output.write("  /run       最終指示文を生成して実行器を起動\n");
   output.write("  /exit      CLIを終了\n");
   output.write("\n");
 }
@@ -87,18 +99,30 @@ async function savePrompt(outputsDir: string, prompt: string): Promise<string> {
   return promptFilePath;
 }
 
-async function runCodexWithPrompt(
-  commandTemplate: string,
+function parseExecutorMode(raw: string): ExecutorMode | null {
+  if (raw === "codex" || raw === "claude" || raw === "auto") {
+    return raw;
+  }
+  return null;
+}
+
+async function runExecutorWithPrompt(
+  executor: ExecutorKey,
+  codexCommandTemplate: string | null,
+  claudeCommandTemplate: string | null,
   prompt: string,
   promptFilePath: string,
   workdir: string,
   outputsDir: string,
 ): Promise<{ runId: string; logFilePath: string; exitCode: number | null }> {
-  output.write("\n--- CodexCLI stream ---\n");
+  const label = executorLabel(executor);
+  output.write(`\n--- ${label} stream ---\n`);
   const result = await new Promise<{ runId: string; logFilePath: string; exitCode: number | null }>(
     (resolve) => {
-      const { runId, logFilePath } = runCodex({
-        commandTemplate,
+      const { runId, logFilePath } = runSelectedExecutor({
+        executor,
+        codexCommandTemplate,
+        claudeCommandTemplate,
         prompt,
         promptFilePath,
         ownerId: "cli-user",
@@ -114,7 +138,7 @@ async function runCodexWithPrompt(
       });
     },
   );
-  output.write("\n--- CodexCLI end ---\n\n");
+  output.write(`\n--- ${label} end ---\n\n`);
   return result;
 }
 
@@ -127,6 +151,7 @@ export async function startCli(): Promise<void> {
 
   const state: CliState = {
     history: [{ role: "system", content: SYSTEM_PROMPT }],
+    executorMode: config.executorMode,
     latestPromptPath: null,
     latestPromptText: null,
   };
@@ -134,6 +159,7 @@ export async function startCli(): Promise<void> {
   output.write(`${BANNER}\n`);
   output.write("LLMdraft CLI\n");
   output.write(`model: ${config.ollamaModel}\n`);
+  output.write(`executor mode: ${state.executorMode}\n`);
   output.write("入力した内容はOllamaと対話しながら指示文に育てられます。\n");
   printHelp();
 
@@ -151,6 +177,21 @@ export async function startCli(): Promise<void> {
           printHelp();
           continue;
         }
+        if (line === "/engine") {
+          output.write(`現在の実行モード: ${state.executorMode}\n\n`);
+          continue;
+        }
+        if (line.startsWith("/engine ")) {
+          const nextModeRaw = line.replace("/engine ", "").trim().toLowerCase();
+          const nextMode = parseExecutorMode(nextModeRaw);
+          if (!nextMode) {
+            output.write("指定値が不正です。`/engine codex|claude|auto` を使ってください。\n\n");
+            continue;
+          }
+          state.executorMode = nextMode;
+          output.write(`実行モードを ${state.executorMode} に変更しました。\n\n`);
+          continue;
+        }
         if (line === "/reset") {
           state.history = [{ role: "system", content: SYSTEM_PROMPT }];
           state.latestPromptPath = null;
@@ -161,7 +202,7 @@ export async function startCli(): Promise<void> {
         if (line === "/finalize") {
           try {
             output.write("最終指示文を生成しています...\n");
-            const prompt = await buildFinalPrompt(ollama, state.history);
+            const { prompt } = await buildFinalPrompt(ollama, state.history);
             const promptFilePath = await savePrompt(config.outputsDir, prompt);
             state.latestPromptPath = promptFilePath;
             state.latestPromptText = prompt;
@@ -177,13 +218,23 @@ export async function startCli(): Promise<void> {
         }
         if (line === "/run") {
           try {
-            output.write("最終指示文を生成してCodexCLIを実行します...\n");
-            const prompt = await buildFinalPrompt(ollama, state.history);
+            output.write("最終指示文を生成して実行器を起動します...\n");
+            const { prompt, historyText } = await buildFinalPrompt(ollama, state.history);
             const promptFilePath = await savePrompt(config.outputsDir, prompt);
             state.latestPromptPath = promptFilePath;
             state.latestPromptText = prompt;
-            const result = await runCodexWithPrompt(
+            const selected = await selectExecutor({
+              mode: state.executorMode,
+              ollama,
+              historyText,
+              codexCommandTemplate: config.codexCommandTemplate,
+              claudeCommandTemplate: config.claudeCommandTemplate,
+            });
+            output.write(`選択実行器: ${executorLabel(selected.executor)} (${selected.reason})\n`);
+            const result = await runExecutorWithPrompt(
+              selected.executor,
               config.codexCommandTemplate,
+              config.claudeCommandTemplate,
               prompt,
               promptFilePath,
               config.codexWorkdir,
@@ -196,7 +247,7 @@ export async function startCli(): Promise<void> {
             output.write(`exit code: ${result.exitCode === null ? "null" : result.exitCode}\n\n`);
           } catch (error) {
             const message = error instanceof Error ? error.message : "不明なエラーです。";
-            output.write(`CodexCLI実行に失敗しました: ${message}\n\n`);
+            output.write(`実行に失敗しました: ${message}\n\n`);
           }
           continue;
         }

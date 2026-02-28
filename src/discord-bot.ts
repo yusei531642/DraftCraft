@@ -13,7 +13,13 @@ import {
   type TextChannel,
 } from "discord.js";
 import { loadDiscordConfig, type DiscordConfig } from "./config";
-import { runCodex } from "./codex-runner";
+import {
+  executorLabel,
+  runSelectedExecutor,
+  selectExecutor,
+  type ExecutorKey,
+  type ExecutorMode,
+} from "./executor";
 import { OllamaClient, type ChatMessage } from "./ollama";
 
 const CREATE_SESSION_BUTTON_ID = "draftcraft:create-session";
@@ -25,24 +31,39 @@ const APP_COMMAND_DEFINITIONS = [
   new SlashCommandBuilder()
     .setName("reset")
     .setDescription("このチャンネルの会話履歴を初期化します"),
-  new SlashCommandBuilder().setName("finalize").setDescription("最終確定してCodexCLIを実行します"),
+  new SlashCommandBuilder()
+    .setName("engine")
+    .setDescription("実行モードを表示/変更します")
+    .addStringOption((option) =>
+      option
+        .setName("mode")
+        .setDescription("codex / claude / auto")
+        .setRequired(false)
+        .addChoices(
+          { name: "codex", value: "codex" },
+          { name: "claude", value: "claude" },
+          { name: "auto", value: "auto" },
+        ),
+    ),
+  new SlashCommandBuilder().setName("finalize").setDescription("最終確定して実行器を起動します"),
   new SlashCommandBuilder().setName("close").setDescription("このセッションチャンネルを閉じます"),
 ].map((command) => command.toJSON());
 
 type DraftSession = {
   ownerId: string;
+  executorMode: ExecutorMode;
   history: ChatMessage[];
   finalizing: boolean;
 };
 
 const SYSTEM_PROMPT = [
-  "あなたはユーザーと一緒に、CodexCLIに渡す実装指示文を作るアシスタントです。",
+  "あなたはユーザーと一緒に、CodexCLIやClaude Codeに渡す実装指示文を作るアシスタントです。",
   "ユーザーの意図を確認し、曖昧な部分は質問し、具体的な手順と完了条件が含まれる指示文へ改善してください。",
   "日本語で簡潔に回答してください。",
 ].join("\n");
 
 const FINALIZER_SYSTEM_PROMPT = [
-  "あなたは会話ログから、CodexCLIへ渡す最終指示文を1つに統合するエディタです。",
+  "あなたは会話ログから、実行器へ渡す最終指示文を1つに統合するエディタです。",
   "出力は最終指示文のみを返してください。",
   "日本語で、目的・要件・制約・完了条件が明確になるように書いてください。",
 ].join("\n");
@@ -116,6 +137,7 @@ function ensureSession(channel: TextChannel): DraftSession | null {
 
   const created: DraftSession = {
     ownerId,
+    executorMode: config.executorMode,
     history: [{ role: "system", content: SYSTEM_PROMPT }],
     finalizing: false,
   };
@@ -151,7 +173,7 @@ async function ensurePanelMessage(): Promise<void> {
     .setDescription(
       [
         "ボタンを押すと、あなただけの作業チャンネルを作成します。",
-        "そのチャンネルでOllamaと会話しながら、CodexCLI向けの指示文を作成できます。",
+        "そのチャンネルでOllamaと会話しながら、Codex/Claude向けの指示文を作成できます。",
       ].join("\n"),
     )
     .setColor(0x2f81f7);
@@ -223,6 +245,7 @@ async function createSessionChannel(guildId: string, ownerId: string): Promise<T
 
   const session: DraftSession = {
     ownerId,
+    executorMode: config.executorMode,
     history: [{ role: "system", content: SYSTEM_PROMPT }],
     finalizing: false,
   };
@@ -233,8 +256,9 @@ async function createSessionChannel(guildId: string, ownerId: string): Promise<T
     .setDescription(
       [
         "このチャンネルで要件を書いてください。Ollamaが整理を手伝います。",
-        "最終的に `最終確定してCodexCLI実行` ボタンでCodexCLIを起動します。",
-        "スラッシュコマンド: `/reset` `/finalize` `/close` を利用できます。",
+        "最終的に `最終確定して実行` ボタンでCodex/Claudeを起動します。",
+        "スラッシュコマンド: `/engine` `/reset` `/finalize` `/close` を利用できます。",
+        `現在の実行モード: \`${session.executorMode}\``,
       ].join("\n"),
     )
     .setColor(0x1f883d);
@@ -242,7 +266,7 @@ async function createSessionChannel(guildId: string, ownerId: string): Promise<T
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(FINALIZE_BUTTON_ID)
-      .setLabel("最終確定してCodexCLI実行")
+      .setLabel("最終確定して実行")
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId(CLOSE_BUTTON_ID)
@@ -292,7 +316,7 @@ function timestamp(): string {
 async function finalizeAndRun(
   channel: TextChannel,
   ownerId: string,
-): Promise<{ promptFilePath: string; logFilePath: string; runId: string }> {
+): Promise<{ promptFilePath: string; logFilePath: string; runId: string; executor: ExecutorKey }> {
   const session = ensureSession(channel);
   if (!session) {
     throw new Error("このチャンネルはDraftCraftセッションとして初期化されていません。");
@@ -320,6 +344,13 @@ async function finalizeAndRun(
     fs.mkdirSync(promptDir, { recursive: true });
     const promptFilePath = path.resolve(promptDir, `prompt-${timestamp()}-${channel.id}.md`);
     fs.writeFileSync(promptFilePath, `${prompt}\n`, "utf8");
+    const selected = await selectExecutor({
+      mode: session.executorMode,
+      ollama,
+      historyText,
+      codexCommandTemplate: config.codexCommandTemplate,
+      claudeCommandTemplate: config.claudeCommandTemplate,
+    });
 
     let streamBuffer = "";
     let flushTimer: NodeJS.Timeout | null = null;
@@ -349,8 +380,10 @@ async function finalizeAndRun(
       }, 2000);
     };
 
-    const { runId, logFilePath } = runCodex({
-      commandTemplate: config.codexCommandTemplate,
+    const { runId, logFilePath } = runSelectedExecutor({
+      executor: selected.executor,
+      codexCommandTemplate: config.codexCommandTemplate,
+      claudeCommandTemplate: config.claudeCommandTemplate,
       prompt,
       promptFilePath,
       ownerId,
@@ -378,7 +411,7 @@ async function finalizeAndRun(
         const codeText = code === null ? "null" : String(code);
         await channel.send(
           [
-            `CodexCLI実行が終了しました。`,
+            `${executorLabel(selected.executor)} 実行が終了しました。`,
             `exit code: ${codeText}`,
             `log: \`${logFilePath}\``,
           ].join("\n"),
@@ -386,7 +419,7 @@ async function finalizeAndRun(
       },
     });
 
-    return { promptFilePath, logFilePath, runId };
+    return { promptFilePath, logFilePath, runId, executor: selected.executor };
   } finally {
     session.finalizing = false;
   }
@@ -432,6 +465,31 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === "engine") {
+      const requestedMode = interaction.options.getString("mode");
+      if (!requestedMode) {
+        await interaction.reply({
+          content: `現在の実行モード: \`${session.executorMode}\``,
+          ephemeral: true,
+        });
+        return;
+      }
+      if (requestedMode !== "codex" && requestedMode !== "claude" && requestedMode !== "auto") {
+        await interaction.reply({
+          content: "無効なモードです。`codex` `claude` `auto` から選択してください。",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      session.executorMode = requestedMode;
+      await interaction.reply({
+        content: `実行モードを \`${session.executorMode}\` に変更しました。`,
+        ephemeral: true,
+      });
+      return;
+    }
+
     if (interaction.commandName === "finalize") {
       await interaction.deferReply({ ephemeral: true });
       try {
@@ -439,13 +497,14 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.editReply(
           [
             "最終確定を実行しました。",
+            `executor: \`${result.executor}\` (${executorLabel(result.executor)})`,
             `run id: \`${result.runId}\``,
             `prompt: \`${result.promptFilePath}\``,
             `log: \`${result.logFilePath}\``,
           ].join("\n"),
         );
         await channel.send(
-          `<@${interaction.user.id}> CodexCLI実行を開始しました。run id: \`${result.runId}\``,
+          `<@${interaction.user.id}> ${executorLabel(result.executor)} 実行を開始しました。run id: \`${result.runId}\``,
         );
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "不明なエラーです。";
@@ -514,13 +573,14 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.editReply(
         [
           "最終確定を実行しました。",
+          `executor: \`${result.executor}\` (${executorLabel(result.executor)})`,
           `run id: \`${result.runId}\``,
           `prompt: \`${result.promptFilePath}\``,
           `log: \`${result.logFilePath}\``,
         ].join("\n"),
       );
       await channel.send(
-        `<@${interaction.user.id}> CodexCLI実行を開始しました。run id: \`${result.runId}\``,
+        `<@${interaction.user.id}> ${executorLabel(result.executor)} 実行を開始しました。run id: \`${result.runId}\``,
       );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "不明なエラーです。";
@@ -549,7 +609,7 @@ client.on("messageCreate", async (message) => {
 
   if (LEGACY_PREFIX_COMMANDS.has(trimmed)) {
     await channel.send(
-      "`!`コマンドは廃止しました。`/reset` `/finalize` `/close` を使ってください。",
+      "`!`コマンドは廃止しました。`/engine` `/reset` `/finalize` `/close` を使ってください。",
     );
     return;
   }
