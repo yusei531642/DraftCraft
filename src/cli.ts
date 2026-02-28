@@ -157,7 +157,7 @@ async function askInActiveBox(
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
   const sep = `${ANSI.dim}${separatorLine(width)}${ANSI.reset}`;
   const status = `${ANSI.dim}${buildStatusLine(state, width)}${ANSI.reset}`;
-  const promptPlain = "chat> ";
+  const promptPlain = "> ";
   const promptColored = `${ANSI.bold}${ANSI.cyan}${promptPlain}${ANSI.reset}`;
   const placeholder = "Type your request...";
   const isTty = Boolean(process.stdout.isTTY && (input as NodeJS.ReadStream).isTTY);
@@ -624,10 +624,10 @@ export async function startCli(): Promise<void> {
         let frameIndex = 0;
         
         if (isTty) {
-          output.write(`${ANSI.cyan}ai> ${ANSI.reset}${frames[0]} 生成中...`);
+          output.write(`${ANSI.cyan}● ${ANSI.reset}${frames[0]} 生成中...`);
           loadingInterval = setInterval(() => {
             frameIndex = (frameIndex + 1) % frames.length;
-            readline.cursorTo(output, 4);
+            readline.cursorTo(output, 2);
             output.write(`${frames[frameIndex]} 生成中...`);
           }, 80);
         }
@@ -636,7 +636,7 @@ export async function startCli(): Promise<void> {
         
         if (loadingInterval) {
           clearInterval(loadingInterval);
-          readline.cursorTo(output, 4);
+          readline.cursorTo(output, 2);
           readline.clearLine(output, 1);
         }
         
@@ -644,14 +644,14 @@ export async function startCli(): Promise<void> {
         state.history = trimHistory(state.history, config.maxHistoryMessages);
         
         if (isTty) {
-          output.write(`${response}\n\n`);
+          output.write(`${ANSI.cyan}● ${ANSI.reset}${response}\n\n`);
         } else {
-          output.write(`ai> ${response}\n\n`);
+          output.write(`● ${response}\n\n`);
         }
       } catch (error) {
         if (loadingInterval) {
           clearInterval(loadingInterval);
-          readline.cursorTo(output, 4);
+          readline.cursorTo(output, 2);
           readline.clearLine(output, 1);
         }
         const message = error instanceof Error ? error.message : "不明なエラーです。";
