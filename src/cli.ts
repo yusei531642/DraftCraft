@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
 import readlinePromises from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { loadCliConfig } from "./config";
@@ -150,7 +149,6 @@ function renderCliFrame(
   );
   output.write(`${ANSI.dim}${configWorkdir}${ANSI.reset}\n`);
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  output.write("Hi! How can I help you today?\n\n");
 }
 
 async function askInActiveBox(
@@ -160,25 +158,10 @@ async function askInActiveBox(
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
   const sep = `${ANSI.dim}${separatorLine(width)}${ANSI.reset}`;
   const status = `${ANSI.dim}${buildStatusLine(state.thinkingLevel, width)}${ANSI.reset}`;
-  const isTty = Boolean(process.stdout.isTTY && (input as NodeJS.ReadStream).isTTY);
-
-  if (!isTty) {
-    output.write(`${sep}\n`);
-    output.write(`${status}\n`);
-    const lineInput = (await rl.question("> ")).trim();
-    output.write("\n");
-    return { lineInput, width };
-  }
-
+  const inputPrompt = "Hi! How can I help you today? ";
+  const lineInput = (await rl.question(inputPrompt)).trim();
   output.write(`${sep}\n`);
-  output.write("> \n");
-  output.write(`${status}\n`);
-  readline.moveCursor(output, 0, -2);
-  readline.cursorTo(output, 2);
-  const lineInput = (await rl.question("")).trim();
-  readline.moveCursor(output, 0, 2);
-  readline.cursorTo(output, 0);
-  output.write("\n");
+  output.write(`${status}\n\n`);
 
   return { lineInput, width };
 }
