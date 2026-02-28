@@ -76,6 +76,14 @@ async function sendLongMessage(channel: TextChannel, content: string): Promise<v
   }
 }
 
+async function sendLongCodeBlock(channel: TextChannel, content: string): Promise<void> {
+  const safe = content.replaceAll("```", "'''");
+  const chunks = chunkText(safe, 1700);
+  for (const chunk of chunks) {
+    await channel.send(`\`\`\`text\n${chunk}\n\`\`\``);
+  }
+}
+
 function trimHistory(history: ChatMessage[], maxHistoryMessages: number): ChatMessage[] {
   if (history.length <= maxHistoryMessages + 1) {
     return history;
@@ -125,7 +133,8 @@ async function ensurePanelMessage(): Promise<void> {
   const panelChannel = panelChannelRaw as TextChannel;
   const messages = await panelChannel.messages.fetch({ limit: 50 });
   const existingPanel = messages.find(
-    (msg) => msg.author.id === client.user?.id && msg.embeds.some((embed) => embed.title === "DraftCraft"),
+    (msg) =>
+      msg.author.id === client.user?.id && msg.embeds.some((embed) => embed.title === "DraftCraft"),
   );
   if (existingPanel) {
     return;
@@ -293,6 +302,34 @@ async function finalizeAndRun(
     const promptFilePath = path.resolve(promptDir, `prompt-${timestamp()}-${channel.id}.md`);
     fs.writeFileSync(promptFilePath, `${prompt}\n`, "utf8");
 
+    let streamBuffer = "";
+    let flushTimer: NodeJS.Timeout | null = null;
+    let flushing = false;
+
+    const flushStream = async (force: boolean): Promise<void> => {
+      if (flushing) return;
+      if (!force && streamBuffer.length < 1200) return;
+
+      const output = streamBuffer.trim();
+      streamBuffer = "";
+      if (!output) return;
+
+      flushing = true;
+      try {
+        await sendLongCodeBlock(channel, output);
+      } finally {
+        flushing = false;
+      }
+    };
+
+    const scheduleFlush = (): void => {
+      if (flushTimer) return;
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        void flushStream(true);
+      }, 2000);
+    };
+
     const { runId, logFilePath } = runCodex({
       commandTemplate: config.codexCommandTemplate,
       prompt,
@@ -301,7 +338,24 @@ async function finalizeAndRun(
       channelId: channel.id,
       workdir: config.codexWorkdir,
       outputsDir: config.outputsDir,
+      onLog: (cleanChunk) => {
+        streamBuffer += cleanChunk;
+        if (streamBuffer.length >= 1200) {
+          if (flushTimer) {
+            clearTimeout(flushTimer);
+            flushTimer = null;
+          }
+          void flushStream(true);
+          return;
+        }
+        scheduleFlush();
+      },
       onExit: async (code) => {
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        await flushStream(true);
         const codeText = code === null ? "null" : String(code);
         await channel.send(
           [

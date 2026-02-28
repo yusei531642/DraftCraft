@@ -10,7 +10,8 @@ Discordのボタン操作で専用チャンネルを作成し、Ollamaと会話�
 - `最終確定してCodexCLI実行` ボタンまたは `!finalize` で:
   - 会話履歴から最終指示文を生成
   - `outputs/prompts` に保存
-  - CodexCLIコマンドをバックグラウンド実行
+  - `node-pty` 経由でCodexCLIをPTY上で実行（対話型CLI互換）
+  - ANSIエスケープを除去した実行ログをDiscordへ逐次投稿
   - 実行ログを `outputs/logs` に保存
 
 ## 必要環境
