@@ -131,8 +131,8 @@ function separatorLine(width: number): string {
 }
 
 function buildStatusLine(thinkingLevel: CliState["thinkingLevel"], width: number): string {
-  const left = "? for shortcuts";
-  const right = `Thinking ${thinkingLevel} | tab: command suggestions`;
+  const left = "[?] shortcuts  [/] command hints  [/run] execute";
+  const right = `Thinking: ${thinkingLevel}`;
   const spaces = Math.max(1, width - left.length - right.length);
   return `${left}${" ".repeat(spaces)}${right}`;
 }
@@ -143,12 +143,13 @@ function renderCliFrame(
   configWorkdir: string,
 ): void {
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
-  output.write(`${ANSI.magenta}[##]${ANSI.reset} ${ANSI.bold}LLMDraft CLI v1${ANSI.reset}\n`);
+  output.write(`${ANSI.magenta}[##]${ANSI.reset} ${ANSI.bold}LLMDraft ChatCLI${ANSI.reset}\n`);
   output.write(
-    `${ANSI.dim}${configProvider.toUpperCase()} agent ${ANSI.reset}${ANSI.cyan}${configModel}${ANSI.reset}\n`,
+    `${ANSI.dim}Model ${ANSI.reset}${ANSI.cyan}${configProvider.toUpperCase()} / ${configModel}${ANSI.reset}\n`,
   );
-  output.write(`${ANSI.dim}${configWorkdir}${ANSI.reset}\n`);
+  output.write(`${ANSI.dim}Workspace ${ANSI.reset}${configWorkdir}\n`);
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
+  output.write("使い方: そのまま相談を書くと会話、`/` でコマンド候補、`?` でヘルプを表示します。\n");
 }
 
 async function askInActiveBox(
@@ -158,10 +159,10 @@ async function askInActiveBox(
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
   const sep = `${ANSI.dim}${separatorLine(width)}${ANSI.reset}`;
   const status = `${ANSI.dim}${buildStatusLine(state.thinkingLevel, width)}${ANSI.reset}`;
-  const inputPrompt = "Hi! How can I help you today? ";
-  const lineInput = (await rl.question(inputPrompt)).trim();
   output.write(`${sep}\n`);
-  output.write(`${status}\n\n`);
+  output.write(`${status}\n`);
+  const lineInput = (await rl.question("you> ")).trim();
+  output.write("\n");
 
   return { lineInput, width };
 }
@@ -401,12 +402,12 @@ export async function startCli(): Promise<void> {
         if (projectContext.contextText) {
           userContent = `${lineInput}\n\n[補足: プロジェクト理解メモ]\n${projectContext.contextText}`;
           output.write(
-            `project> ${projectContext.resolvedProjects.join(", ")} を実行器に確認して理解した上で続行します。\n`,
+            `system> ${projectContext.resolvedProjects.join(", ")} を実行器に確認して理解した上で続行します。\n`,
           );
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "不明なエラーです。";
-        output.write(`project> プロジェクト調査に失敗したため通常応答で続行します: ${message}\n`);
+        output.write(`system> プロジェクト調査に失敗したため通常応答で続行します: ${message}\n`);
       }
 
       state.history.push({ role: "user", content: userContent });
@@ -416,7 +417,7 @@ export async function startCli(): Promise<void> {
         const response = await llm.chat(state.history);
         state.history.push({ role: "assistant", content: response });
         state.history = trimHistory(state.history, config.maxHistoryMessages);
-        output.write(`assistant> ${response}\n\n`);
+        output.write(`ai> ${response}\n\n`);
       } catch (error) {
         const message = error instanceof Error ? error.message : "不明なエラーです。";
         output.write(`LLM連携でエラーが発生しました: ${message}\n\n`);
