@@ -61,6 +61,7 @@ export async function runExecutorForProjectProbe(options: {
   outputsDir: string;
   ownerId: string;
   sessionId: string;
+  onLog?: (chunk: string) => void;
 }): Promise<{ logText: string; executorName: string }> {
   const selected = await selectExecutor({
     mode: options.executorMode,
@@ -105,6 +106,7 @@ export async function runExecutorForProjectProbe(options: {
       channelId: options.sessionId,
       workdir: options.workdir,
       outputsDir: options.outputsDir,
+      onLog: options.onLog,
       onExit: () => resolve({ logFilePath }),
     });
   });

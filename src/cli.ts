@@ -398,6 +398,8 @@ export async function startCli(): Promise<void> {
     let frameIndex = 0;
     
     let loadingInterval: NodeJS.Timeout | null = null;
+    let logStarted = false;
+    
     if (process.stdout.isTTY) {
       output.write(`\n${ANSI.cyan}system> ${ANSI.reset}${frames[0]} ワークスペースの概要を調査しています...`);
       loadingInterval = setInterval(() => {
@@ -420,10 +422,22 @@ export async function startCli(): Promise<void> {
       outputsDir: config.outputsDir,
       ownerId: "cli-user",
       sessionId: "cli-session",
+      onLog: (chunk) => {
+        if (!logStarted) {
+          logStarted = true;
+          if (loadingInterval) {
+            clearInterval(loadingInterval);
+            readline.cursorTo(output, 0);
+            readline.clearLine(output, 1);
+            output.write(`${ANSI.cyan}system> ${ANSI.reset}ワークスペース調査ログ:\n`);
+          }
+        }
+        output.write(`${ANSI.dim}${chunk}${ANSI.reset}`);
+      }
     });
     workspaceSummary = await summarizeProjectProbe(llm, projectName, probe.executorName, probe.logText);
 
-    if (loadingInterval) {
+    if (loadingInterval && !logStarted) {
       clearInterval(loadingInterval);
       readline.cursorTo(output, 8);
       readline.clearLine(output, 1);
@@ -432,7 +446,7 @@ export async function startCli(): Promise<void> {
     if (process.stdout.isTTY) {
       output.write(`\r${ANSI.cyan}system> ${ANSI.reset}ワークスペースの概要を把握しました。\n\n`);
     } else {
-      output.write("system> ワークスペースの概要を把握しました。\n\n");
+      output.write("\nsystem> ワークスペースの概要を把握しました。\n\n");
     }
 
     initialSystemPrompt = `${SYSTEM_PROMPT}\n\n【ワークスペース概要】\n${workspaceSummary}`;
