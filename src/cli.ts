@@ -130,9 +130,9 @@ function separatorLine(width: number): string {
   return "-".repeat(Math.max(20, width));
 }
 
-function buildStatusLine(state: CliState, width: number): string {
+function buildStatusLine(thinkingLevel: CliState["thinkingLevel"], width: number): string {
   const left = "? for shortcuts";
-  const right = `Thinking ${state.thinkingLevel} | tab: command suggestions`;
+  const right = `Thinking ${thinkingLevel} | tab: command suggestions`;
   const spaces = Math.max(1, width - left.length - right.length);
   return `${left}${" ".repeat(spaces)}${right}`;
 }
@@ -149,7 +149,7 @@ function renderCliFrame(
   );
   output.write(`${ANSI.dim}${configWorkdir}${ANSI.reset}\n`);
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  output.write(`${ANSI.dim}入力欄は下に表示されます。${ANSI.reset}\n\n`);
+  output.write("Hi! How can I help you today?\n\n");
 }
 
 async function askInActiveBox(
@@ -157,22 +157,9 @@ async function askInActiveBox(
   state: CliState,
 ): Promise<{ lineInput: string; width: number }> {
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
-  const isTty = process.stdout.isTTY && (input as NodeJS.ReadStream).isTTY;
-  if (!isTty) {
-    output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-    const lineInput = (await rl.question("| > ")).trim();
-    output.write(`${ANSI.dim}${buildStatusLine(state, width)}${ANSI.reset}\n`);
-    output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n\n`);
-    return { lineInput, width };
-  }
-
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  output.write("| > \n");
-  output.write(`${ANSI.dim}${buildStatusLine(state, width)}${ANSI.reset}\n`);
-  output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  output.write("\x1b[3A\r| > ");
-  const lineInput = (await rl.question("")).trim();
-  output.write("\x1b[3B\r\n");
+  const lineInput = (await rl.question("> ")).trim();
+  output.write(`${ANSI.dim}${buildStatusLine(state.thinkingLevel, width)}${ANSI.reset}\n\n`);
   return { lineInput, width };
 }
 
