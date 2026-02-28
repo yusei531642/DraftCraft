@@ -27,6 +27,7 @@ const SLASH_COMMANDS = [
   "/help",
   "/engine",
   "/thinking",
+  "/clear",
   "/reset",
   "/finalize",
   "/run",
@@ -37,6 +38,7 @@ const SLASH_COMMAND_HELP: Record<(typeof SLASH_COMMANDS)[number], string> = {
   "/help": "ヘルプを表示",
   "/engine": "実行モード表示/変更",
   "/thinking": "Thinkingレベル切替",
+  "/clear": "画面をクリア",
   "/reset": "会話履歴を初期化",
   "/finalize": "最終指示文を生成して保存",
   "/run": "最終指示文を生成して実行器を起動",
@@ -119,6 +121,7 @@ function printHelp(): void {
   output.write("  /engine    実行モード表示 (codex / claude / auto)\n");
   output.write("  /engine X  実行モード変更 (X: codex|claude|auto)\n");
   output.write("  /thinking  Thinkingレベル切替 (normal/deep)\n");
+  output.write("  /clear     画面をクリア\n");
   output.write("  /reset     会話履歴を初期化\n");
   output.write("  /finalize  最終指示文を生成して保存\n");
   output.write("  /run       最終指示文を生成して実行器を起動\n");
@@ -130,26 +133,22 @@ function separatorLine(width: number): string {
   return "-".repeat(Math.max(20, width));
 }
 
-function buildStatusLine(thinkingLevel: CliState["thinkingLevel"], width: number): string {
-  const left = "[?] shortcuts  [/] command hints  [/run] execute";
-  const right = `Thinking: ${thinkingLevel}`;
+function buildStatusLine(state: CliState, width: number): string {
+  const left = "[/] commands  [?] help  [tab] complete";
+  const right = `mode:${state.executorMode}  thinking:${state.thinkingLevel}`;
   const spaces = Math.max(1, width - left.length - right.length);
   return `${left}${" ".repeat(spaces)}${right}`;
 }
 
-function renderCliFrame(
-  configModel: string,
-  configProvider: string,
-  configWorkdir: string,
-): void {
+function renderCliFrame(configModel: string, configProvider: string, configWorkdir: string): void {
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
   output.write(`${ANSI.magenta}[##]${ANSI.reset} ${ANSI.bold}LLMDraft ChatCLI${ANSI.reset}\n`);
   output.write(
-    `${ANSI.dim}Model ${ANSI.reset}${ANSI.cyan}${configProvider.toUpperCase()} / ${configModel}${ANSI.reset}\n`,
+    `${ANSI.dim}session ${ANSI.reset}${ANSI.cyan}${configProvider.toUpperCase()} / ${configModel}${ANSI.reset}\n`,
   );
-  output.write(`${ANSI.dim}Workspace ${ANSI.reset}${configWorkdir}\n`);
+  output.write(`${ANSI.dim}workspace ${ANSI.reset}${configWorkdir}\n`);
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  output.write("使い方: そのまま相談を書くと会話、`/` でコマンド候補、`?` でヘルプを表示します。\n");
+  output.write("Type your request. Use /run to generate+execute final prompt.\n");
 }
 
 async function askInActiveBox(
@@ -158,10 +157,10 @@ async function askInActiveBox(
 ): Promise<{ lineInput: string; width: number }> {
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
   const sep = `${ANSI.dim}${separatorLine(width)}${ANSI.reset}`;
-  const status = `${ANSI.dim}${buildStatusLine(state.thinkingLevel, width)}${ANSI.reset}`;
+  const status = `${ANSI.dim}${buildStatusLine(state, width)}${ANSI.reset}`;
   output.write(`${sep}\n`);
   output.write(`${status}\n`);
-  const lineInput = (await rl.question("you> ")).trim();
+  const lineInput = (await rl.question(`${ANSI.bold}${ANSI.cyan}chat>${ANSI.reset} `)).trim();
   output.write("\n");
 
   return { lineInput, width };
@@ -288,6 +287,14 @@ export async function startCli(): Promise<void> {
         if (lineInput === "/thinking") {
           state.thinkingLevel = state.thinkingLevel === "normal" ? "deep" : "normal";
           output.write(`Thinkingレベルを ${state.thinkingLevel} に変更しました。\n\n`);
+          continue;
+        }
+        if (lineInput === "/clear") {
+          if (process.stdout.isTTY) {
+            output.write("\x1b[2J\x1b[H");
+          }
+          output.write(`${BANNER}\n`);
+          renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir);
           continue;
         }
         if (lineInput === "/engine") {
