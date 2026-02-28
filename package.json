@@ -1,12 +1,14 @@
 {
   "name": "draftcraft",
   "version": "1.0.0",
-  "description": "Discord + Ollama + CodexCLI を連携して指示文作成を支援する Bot",
+  "description": "LLMdraft CLI (メイン) と Discord 連携 (サブ) で指示文作成を支援するツール",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:bot": "tsx watch src/index.ts bot",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "start:bot": "node dist/index.js bot",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.ts\"",
     "format": "prettier --write \"**/*.{ts,js,json,md,yml,yaml}\"",

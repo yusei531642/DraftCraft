@@ -1,25 +1,30 @@
 # DraftCraft
 
-Discordのボタン操作で専用チャンネルを作成し、Ollamaと会話しながらCodexCLI向けの指示文を仕上げ、最終確定時にCodexCLIを実行するツールです。
+`LLMdraft CLI` をメインに、Ollamaとの対話で指示文を作り、最終的にCodexCLIを実行するツールです。  
+Discord連携はサブ機能として利用できます。
 
-## 機能
+## メイン機能（CLI）
+
+- 起動時に `LLMdraft` のAAアートを表示
+- Gemini CLI / Claude Code 風の対話フローでOllamaとチャット
+- 会話履歴から最終指示文を統合し `outputs/prompts` に保存
+- `node-pty` 経由でCodexCLIをPTY実行
+- 実行ログを `outputs/logs` に保存
+
+## サブ機能（Discord）
 
 - 設定済みチャンネルに、Embed + ボタンの開始パネルを自動投稿
 - ボタン押下で、ユーザー専用の作業チャンネルをカテゴリ配下に作成
-- 作業チャンネル内でOllamaと対話して指示文をブラッシュアップ
-- `最終確定してCodexCLI実行` ボタンまたは `!finalize` で:
-  - 会話履歴から最終指示文を生成
-  - `outputs/prompts` に保存
-  - `node-pty` 経由でCodexCLIをPTY上で実行（対話型CLI互換）
-  - ANSIエスケープを除去した実行ログをDiscordへ逐次投稿
-  - 実行ログを `outputs/logs` に保存
+- 作業チャンネル内でOllamaと対話
+- `/reset` `/finalize` `/close` のアプリコマンドに対応
+- `/finalize` またはボタンでCodexCLIを実行し、ANSI除去済みログをDiscordへ逐次投稿
 
 ## 必要環境
 
 - Node.js 20+
-- Discord Bot Token
 - Ollama（ローカルまたは接続可能なサーバー）
 - CodexCLI（`CODEX_COMMAND_TEMPLATE` で実行可能な状態）
+- Discord連携を使う場合のみ Discord Bot Token
 
 ## セットアップ
 
@@ -31,14 +36,16 @@ copy .env.example .env
 `.env` を編集してください。
 
 ```env
-DISCORD_BOT_TOKEN=your_discord_bot_token
-PANEL_CHANNEL_ID=123456789012345678
-SESSION_CATEGORY_ID=123456789012345678
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.1:8b
 CODEX_COMMAND_TEMPLATE=codex
 CODEX_WORKDIR=D:/program/creativebot
 MAX_HISTORY_MESSAGES=30
+
+# Discord連携を使う場合のみ必須
+DISCORD_BOT_TOKEN=your_discord_bot_token
+PANEL_CHANNEL_ID=123456789012345678
+SESSION_CATEGORY_ID=123456789012345678
 ```
 
 ## `CODEX_COMMAND_TEMPLATE` の使い方
@@ -46,11 +53,11 @@ MAX_HISTORY_MESSAGES=30
 `CODEX_COMMAND_TEMPLATE` は最終確定時にそのまま実行されます。以下のプレースホルダを使用できます。
 
 - `{PROMPT_FILE}`: 生成された最終指示文ファイルパス
-- `{CHANNEL_ID}`: セッションチャンネルID
-- `{OWNER_ID}`: セッション作成者のユーザーID
+- `{CHANNEL_ID}`: セッションチャンネルID（CLIでは `cli-session`）
+- `{OWNER_ID}`: セッション作成者ID（CLIでは `cli-user`）
 - `{WORKDIR}`: `CODEX_WORKDIR`
 
-また実行時に環境変数も渡します。
+実行時に環境変数も渡します。
 
 - `DRAFTCRAFT_PROMPT`
 - `DRAFTCRAFT_PROMPT_FILE`
@@ -66,23 +73,26 @@ CODEX_COMMAND_TEMPLATE=codex --prompt-file "{PROMPT_FILE}"
 
 ## 起動
 
-開発モード:
+CLI（メイン）:
 
 ```bash
 npm run dev
-```
-
-本番ビルド:
-
-```bash
-npm run build
+# または
 npm run start
 ```
 
-## セッション操作
+Discord Bot（サブ）:
 
-作業チャンネル内で使えるアプリコマンド:
+```bash
+npm run dev:bot
+# または
+npm run start:bot
+```
 
+## CLIコマンド
+
+- `/help` ヘルプ表示
 - `/reset` 会話履歴を初期化
-- `/finalize` 最終確定してCodexCLI実行
-- `/close` チャンネルを削除
+- `/finalize` 最終指示文を生成して保存
+- `/run` 最終指示文を生成してCodexCLI実行
+- `/exit` 終了
