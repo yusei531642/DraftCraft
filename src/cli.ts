@@ -28,6 +28,7 @@ const ANSI = {
 const SLASH_COMMANDS = [
   "/help",
   "/engine",
+  "/autorun",
   "/thinking",
   "/clear",
   "/reset",
@@ -39,6 +40,7 @@ const SLASH_COMMANDS = [
 const SLASH_COMMAND_HELP: Record<(typeof SLASH_COMMANDS)[number], string> = {
   "/help": "ヘルプを表示",
   "/engine": "実行モード表示/変更",
+  "/autorun": "通常入力時の自動実行切替",
   "/thinking": "Thinkingレベル切替",
   "/clear": "画面をクリア",
   "/reset": "会話履歴を初期化",
@@ -89,6 +91,7 @@ const BANNER = String.raw`
 type CliState = {
   history: ChatMessage[];
   executorMode: ExecutorMode;
+  autoRunEnabled: boolean;
   projectContextCache: Map<string, string>;
   thinkingLevel: "normal" | "deep";
   latestPromptPath: string | null;
@@ -156,6 +159,8 @@ function printHelp(): void {
   output.write("  /help      ヘルプを表示\n");
   output.write("  /engine    実行モード表示 (codex / claude / auto)\n");
   output.write("  /engine X  実行モード変更 (X: codex|claude|auto)\n");
+  output.write("  /autorun   通常入力時の自動実行状態を表示\n");
+  output.write("  /autorun X 自動実行を変更 (X: on|off)\n");
   output.write("  /thinking  Thinkingレベル切替 (normal/deep)\n");
   output.write("  /clear     画面をクリア\n");
   output.write("  /reset     会話履歴を初期化\n");
@@ -171,7 +176,7 @@ function separatorLine(width: number): string {
 
 function buildStatusLine(state: CliState, width: number): string {
   const left = "[/] commands  [?] help  [tab] complete";
-  const right = `mode:${state.executorMode}  thinking:${state.thinkingLevel}`;
+  const right = `mode:${state.executorMode}  auto:${state.autoRunEnabled ? "on" : "off"}  thinking:${state.thinkingLevel}`;
   const spaces = Math.max(1, width - left.length - right.length);
   return `${left}${" ".repeat(spaces)}${right}`;
 }
@@ -380,6 +385,49 @@ function parseExecutorMode(raw: string): ExecutorMode | null {
   return null;
 }
 
+function parseAutoRunMode(raw: string): boolean | null {
+  if (raw === "on") {
+    return true;
+  }
+  if (raw === "off") {
+    return false;
+  }
+  return null;
+}
+
+function shouldAutoExecuteRequest(message: string): boolean {
+  const text = message.trim();
+  if (!text || text.startsWith("/") || text.length < 4) {
+    return false;
+  }
+
+  const likelyTask = [
+    /してほしい/u,
+    /してください/u,
+    /やって/u,
+    /作って/u,
+    /追加/u,
+    /修正/u,
+    /実装/u,
+    /作成/u,
+    /変更/u,
+    /直して/u,
+    /改善/u,
+    /対応/u,
+    /リファクタ/u,
+    /機能/u,
+  ].some((pattern) => pattern.test(text));
+
+  if (!likelyTask) {
+    return false;
+  }
+
+  const likelyChatOnly = [/ありがとう/u, /感謝/u, /^ok$/iu, /^了解$/u, /^はい$/u, /^いいえ$/u].some(
+    (pattern) => pattern.test(text),
+  );
+  return !likelyChatOnly;
+}
+
 async function runExecutorWithPrompt(
   executor: ExecutorKey,
   codexCommandTemplate: string | null,
@@ -388,9 +436,12 @@ async function runExecutorWithPrompt(
   promptFilePath: string,
   workdir: string,
   outputsDir: string,
+  streamLogs: boolean,
 ): Promise<{ runId: string; logFilePath: string; exitCode: number | null }> {
   const label = executorLabel(executor);
-  output.write(`\n--- ${label} stream ---\n`);
+  if (streamLogs) {
+    output.write(`\n--- ${label} stream ---\n`);
+  }
   const result = await new Promise<{ runId: string; logFilePath: string; exitCode: number | null }>(
     (resolve) => {
       const { runId, logFilePath } = runSelectedExecutor({
@@ -403,17 +454,80 @@ async function runExecutorWithPrompt(
         channelId: "cli-session",
         workdir,
         outputsDir,
-        onLog: (cleanChunk) => {
-          output.write(cleanChunk);
-        },
+        onLog: streamLogs
+          ? (cleanChunk) => {
+              output.write(cleanChunk);
+            }
+          : undefined,
         onExit: (code) => {
           resolve({ runId, logFilePath, exitCode: code });
         },
       });
     },
   );
-  output.write(`\n--- ${label} end ---\n\n`);
+  if (streamLogs) {
+    output.write(`\n--- ${label} end ---\n\n`);
+  }
   return result;
+}
+
+async function executeCurrentInstruction(options: {
+  llm: LlmClient;
+  state: CliState;
+  config: ReturnType<typeof loadCliConfig>;
+  streamLogs: boolean;
+}): Promise<{
+  selectedExecutor: ExecutorKey;
+  selectedReason: string;
+  promptFilePath: string;
+  runId: string;
+  logFilePath: string;
+  exitCode: number | null;
+  simpleExplanation: string;
+}> {
+  const { prompt, historyText } = await buildFinalPrompt(options.llm, options.state.history);
+  const promptFilePath = await savePrompt(options.config.outputsDir, prompt);
+  options.state.latestPromptPath = promptFilePath;
+  options.state.latestPromptText = prompt;
+
+  const selected = await selectExecutor({
+    mode: options.state.executorMode,
+    llm: options.llm,
+    historyText,
+    codexCommandTemplate: options.config.codexCommandTemplate,
+    claudeCommandTemplate: options.config.claudeCommandTemplate,
+  });
+
+  const result = await runExecutorWithPrompt(
+    selected.executor,
+    options.config.codexCommandTemplate,
+    options.config.claudeCommandTemplate,
+    prompt,
+    promptFilePath,
+    options.config.codexWorkdir,
+    options.config.outputsDir,
+    options.streamLogs,
+  );
+
+  const logText = fs.existsSync(result.logFilePath)
+    ? fs.readFileSync(result.logFilePath, "utf8")
+    : "";
+  const simpleExplanation = await explainExecutorResult({
+    llm: options.llm,
+    executorLabel: executorLabel(selected.executor),
+    exitCode: result.exitCode,
+    logText,
+  });
+
+  return {
+    selectedExecutor: selected.executor,
+    selectedReason: selected.reason,
+    promptFilePath,
+    runId: result.runId,
+    logFilePath: result.logFilePath,
+    exitCode: result.exitCode,
+    simpleExplanation,
+  };
 }
 
 export async function startCli(): Promise<void> {
@@ -427,6 +541,7 @@ export async function startCli(): Promise<void> {
   const state: CliState = {
     history: [{ role: "system", content: SYSTEM_PROMPT }],
     executorMode: config.executorMode,
+    autoRunEnabled: true,
     projectContextCache: new Map<string, string>(),
     thinkingLevel: "normal",
     latestPromptPath: null,
@@ -482,6 +597,21 @@ export async function startCli(): Promise<void> {
           output.write(`現在の実行モード: ${state.executorMode}\n\n`);
           continue;
         }
+        if (lineInput === "/autorun") {
+          output.write(`自動実行: ${state.autoRunEnabled ? "on" : "off"}\n\n`);
+          continue;
+        }
+        if (lineInput.startsWith("/autorun ")) {
+          const nextModeRaw = lineInput.replace("/autorun ", "").trim().toLowerCase();
+          const nextMode = parseAutoRunMode(nextModeRaw);
+          if (nextMode === null) {
+            output.write("指定値が不正です。`/autorun on|off` を使ってください。\n\n");
+            continue;
+          }
+          state.autoRunEnabled = nextMode;
+          output.write(`自動実行を ${state.autoRunEnabled ? "on" : "off"} に変更しました。\n\n`);
+          continue;
+        }
         if (lineInput.startsWith("/engine ")) {
           const nextModeRaw = lineInput.replace("/engine ", "").trim().toLowerCase();
           const nextMode = parseExecutorMode(nextModeRaw);
@@ -521,43 +651,22 @@ export async function startCli(): Promise<void> {
         if (lineInput === "/run") {
           try {
             output.write("最終指示文を生成して実行器を起動します...\n");
-            const { prompt, historyText } = await buildFinalPrompt(llm, state.history);
-            const promptFilePath = await savePrompt(config.outputsDir, prompt);
-            state.latestPromptPath = promptFilePath;
-            state.latestPromptText = prompt;
-            const selected = await selectExecutor({
-              mode: state.executorMode,
+            const runResult = await executeCurrentInstruction({
               llm,
-              historyText,
-              codexCommandTemplate: config.codexCommandTemplate,
-              claudeCommandTemplate: config.claudeCommandTemplate,
+              state,
+              config,
+              streamLogs: true,
             });
-            output.write(`選択実行器: ${executorLabel(selected.executor)} (${selected.reason})\n`);
-            const result = await runExecutorWithPrompt(
-              selected.executor,
-              config.codexCommandTemplate,
-              config.claudeCommandTemplate,
-              prompt,
-              promptFilePath,
-              config.codexWorkdir,
-              config.outputsDir,
+            output.write(
+              `選択実行器: ${executorLabel(runResult.selectedExecutor)} (${runResult.selectedReason})\n`,
             );
-
-            output.write(`run id: ${result.runId}\n`);
-            output.write(`prompt: ${promptFilePath}\n`);
-            output.write(`log: ${result.logFilePath}\n`);
-            output.write(`exit code: ${result.exitCode === null ? "null" : result.exitCode}\n\n`);
-
-            const logText = fs.existsSync(result.logFilePath)
-              ? fs.readFileSync(result.logFilePath, "utf8")
-              : "";
-            const simpleExplanation = await explainExecutorResult({
-              llm,
-              executorLabel: executorLabel(selected.executor),
-              exitCode: result.exitCode,
-              logText,
-            });
-            output.write(`${simpleExplanation}\n\n`);
+            output.write(`run id: ${runResult.runId}\n`);
+            output.write(`prompt: ${runResult.promptFilePath}\n`);
+            output.write(`log: ${runResult.logFilePath}\n`);
+            output.write(
+              `exit code: ${runResult.exitCode === null ? "null" : runResult.exitCode}\n\n`,
+            );
+            output.write(`${runResult.simpleExplanation}\n\n`);
           } catch (error) {
             const message = error instanceof Error ? error.message : "不明なエラーです。";
             output.write(`実行に失敗しました: ${message}\n\n`);
@@ -600,6 +709,35 @@ export async function startCli(): Promise<void> {
 
       state.history.push({ role: "user", content: userContent });
       state.history = trimHistory(state.history, config.maxHistoryMessages);
+
+      if (state.autoRunEnabled && shouldAutoExecuteRequest(lineInput)) {
+        try {
+          output.write(
+            `${ANSI.cyan}system> ${ANSI.reset}依頼を受け取りました。実行器を裏で起動して進めます...\n`,
+          );
+          const runResult = await executeCurrentInstruction({
+            llm,
+            state,
+            config,
+            streamLogs: false,
+          });
+
+          const finalReport = [
+            "実行結果:",
+            `- 実行器: ${executorLabel(runResult.selectedExecutor)}`,
+            `- 状態: ${runResult.exitCode === 0 ? "成功" : "要確認"}`,
+            ...runResult.simpleExplanation.split("\n").filter((line) => line.trim().length > 0),
+          ].join("\n");
+
+          state.history.push({ role: "assistant", content: finalReport });
+          state.history = trimHistory(state.history, config.maxHistoryMessages);
+          output.write(`${ANSI.cyan}● ${ANSI.reset}${finalReport}\n\n`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "不明なエラーです。";
+          output.write(`自動実行に失敗しました: ${message}\n\n`);
+        }
+        continue;
+      }
 
       let loadingInterval: NodeJS.Timeout | null = null;
       try {
