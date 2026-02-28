@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 async function main(): Promise<void> {
   const mode = (process.argv[2] ?? "cli").toLowerCase();
 

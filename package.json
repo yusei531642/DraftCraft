@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "LLMDraft CLI (メイン) と Discord 連携 (サブ) で指示文作成を支援するツール",
   "main": "dist/index.js",
+  "bin": {
+    "llmcraft": "./dist/index.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "dev:bot": "tsx watch src/index.ts bot",
