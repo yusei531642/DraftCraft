@@ -3,7 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import readlinePromises from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { loadCliConfig } from "./config";
+import { type BaseConfig, loadCliConfig } from "./config";
 import { explainExecutorResult } from "./explain";
 import {
   executorLabel,
@@ -13,7 +13,7 @@ import {
   type ExecutorMode,
 } from "./executor";
 import { LlmClient, type ChatMessage } from "./llm";
-import { resolveProjectContext } from "./project-context";
+import { resolveProjectContext, runExecutorForProjectProbe, summarizeProjectProbe } from "./project-context";
 import { ensureCliSetup } from "./setup";
 
 const ANSI = {
@@ -197,6 +197,18 @@ async function askInActiveBox(
         return;
       }
       output.write(current);
+
+      if (current.startsWith("/") && cursor === current.length) {
+        const hits = SLASH_COMMANDS.filter((command) => command.startsWith(current));
+        if (hits.length > 0) {
+          const match = hits[0];
+          if (match && match.length > current.length) {
+            const suggestion = match.slice(current.length);
+            output.write(`${ANSI.gray}${suggestion}${ANSI.reset}`);
+          }
+        }
+      }
+
       readline.cursorTo(output, promptPlain.length + cursor);
     };
 
@@ -375,17 +387,68 @@ export async function startCli(): Promise<void> {
   const config = loadCliConfig();
   const llm = new LlmClient(config.llm);
 
+  output.write(`${BANNER}\n`);
+  renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir);
+
+  let workspaceSummary = "";
+  let initialSystemPrompt = SYSTEM_PROMPT;
+  
+  try {
+    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let frameIndex = 0;
+    
+    let loadingInterval: NodeJS.Timeout | null = null;
+    if (process.stdout.isTTY) {
+      output.write(`\n${ANSI.cyan}system> ${ANSI.reset}${frames[0]} ワークスペースの概要を調査しています...`);
+      loadingInterval = setInterval(() => {
+        frameIndex = (frameIndex + 1) % frames.length;
+        readline.cursorTo(output, 8);
+        output.write(`${frames[frameIndex]} ワークスペースの概要を調査しています...`);
+      }, 80);
+    } else {
+      output.write("\nsystem> ワークスペースの概要を調査しています...\n");
+    }
+
+    const projectName = path.basename(config.codexWorkdir) || "workspace";
+    const probe = await runExecutorForProjectProbe({
+      llm,
+      executorMode: config.executorMode,
+      codexCommandTemplate: config.codexCommandTemplate,
+      claudeCommandTemplate: config.claudeCommandTemplate,
+      projectName,
+      workdir: config.codexWorkdir,
+      outputsDir: config.outputsDir,
+      ownerId: "cli-user",
+      sessionId: "cli-session",
+    });
+    workspaceSummary = await summarizeProjectProbe(llm, projectName, probe.executorName, probe.logText);
+
+    if (loadingInterval) {
+      clearInterval(loadingInterval);
+      readline.cursorTo(output, 8);
+      readline.clearLine(output, 1);
+    }
+    
+    if (process.stdout.isTTY) {
+      output.write(`\r${ANSI.cyan}system> ${ANSI.reset}ワークスペースの概要を把握しました。\n\n`);
+    } else {
+      output.write("system> ワークスペースの概要を把握しました。\n\n");
+    }
+
+    initialSystemPrompt = `${SYSTEM_PROMPT}\n\n【ワークスペース概要】\n${workspaceSummary}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーです。";
+    output.write(`\nsystem> ワークスペースの概要調査に失敗しました: ${message}\n\n`);
+  }
+
   const state: CliState = {
-    history: [{ role: "system", content: SYSTEM_PROMPT }],
+    history: [{ role: "system", content: initialSystemPrompt }],
     executorMode: config.executorMode,
     projectContextCache: new Map<string, string>(),
     thinkingLevel: "normal",
     latestPromptPath: null,
     latestPromptText: null,
   };
-
-  output.write(`${BANNER}\n`);
-  renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir);
 
   const isTty = Boolean(process.stdout.isTTY && (input as NodeJS.ReadStream).isTTY);
   const rl = isTty
@@ -555,12 +618,42 @@ export async function startCli(): Promise<void> {
       state.history.push({ role: "user", content: userContent });
       state.history = trimHistory(state.history, config.maxHistoryMessages);
 
+      let loadingInterval: NodeJS.Timeout | null = null;
       try {
+        const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let frameIndex = 0;
+        
+        if (isTty) {
+          output.write(`${ANSI.cyan}ai> ${ANSI.reset}${frames[0]} 生成中...`);
+          loadingInterval = setInterval(() => {
+            frameIndex = (frameIndex + 1) % frames.length;
+            readline.cursorTo(output, 4);
+            output.write(`${frames[frameIndex]} 生成中...`);
+          }, 80);
+        }
+
         const response = await llm.chat(state.history);
+        
+        if (loadingInterval) {
+          clearInterval(loadingInterval);
+          readline.cursorTo(output, 4);
+          readline.clearLine(output, 1);
+        }
+        
         state.history.push({ role: "assistant", content: response });
         state.history = trimHistory(state.history, config.maxHistoryMessages);
-        output.write(`ai> ${response}\n\n`);
+        
+        if (isTty) {
+          output.write(`${response}\n\n`);
+        } else {
+          output.write(`ai> ${response}\n\n`);
+        }
       } catch (error) {
+        if (loadingInterval) {
+          clearInterval(loadingInterval);
+          readline.cursorTo(output, 4);
+          readline.clearLine(output, 1);
+        }
         const message = error instanceof Error ? error.message : "不明なエラーです。";
         output.write(`LLM連携でエラーが発生しました: ${message}\n\n`);
       }

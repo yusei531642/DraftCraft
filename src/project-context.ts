@@ -51,7 +51,7 @@ function extractProjectNames(text: string): string[] {
   return [...names];
 }
 
-async function runExecutorForProjectProbe(options: {
+export async function runExecutorForProjectProbe(options: {
   llm: LlmClient;
   executorMode: ExecutorMode;
   codexCommandTemplate: string | null;
@@ -118,7 +118,7 @@ async function runExecutorForProjectProbe(options: {
   };
 }
 
-async function summarizeProjectProbe(
+export async function summarizeProjectProbe(
   llm: LlmClient,
   projectName: string,
   executorName: string,
