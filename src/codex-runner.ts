@@ -33,17 +33,39 @@ function sanitizeForDiscord(text: string): string {
   return stripVTControlCharacters(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
+function resolveTemplatePath(filePath: string, commandTemplate: string): string {
+  if (process.platform !== "win32") {
+    return filePath;
+  }
+
+  // Inline `node -e "...createReadStream('{PROMPT_FILE}')..."` needs forward slashes.
+  const isInlineNodeRead =
+    /node\s+-e/i.test(commandTemplate) && /createreadstream\s*\(/i.test(commandTemplate);
+
+  if (isInlineNodeRead) {
+    return filePath.replaceAll("\\", "/");
+  }
+
+  // Keep native backslashes for cmd built-ins such as `type` or input redirection.
+  return filePath;
+}
+
 export function runCodex(options: RunCodexOptions): { runId: string; logFilePath: string } {
   const runId = `${options.channelId}-${Date.now()}`;
   const logDir = path.resolve(options.outputsDir, "logs");
   fs.mkdirSync(logDir, { recursive: true });
   const logFilePath = path.resolve(logDir, `codex-${timestamp()}-${runId}.log`);
 
+  const promptFileForTemplate = resolveTemplatePath(
+    options.promptFilePath,
+    options.commandTemplate,
+  );
+  const workdirForTemplate = resolveTemplatePath(options.workdir, options.commandTemplate);
   const command = options.commandTemplate
-    .replaceAll("{PROMPT_FILE}", options.promptFilePath)
+    .replaceAll("{PROMPT_FILE}", promptFileForTemplate)
     .replaceAll("{CHANNEL_ID}", options.channelId)
     .replaceAll("{OWNER_ID}", options.ownerId)
-    .replaceAll("{WORKDIR}", options.workdir);
+    .replaceAll("{WORKDIR}", workdirForTemplate);
 
   const writeLog = (text: string): void => {
     fs.appendFileSync(logFilePath, text, "utf8");
