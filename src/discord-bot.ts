@@ -173,7 +173,7 @@ async function ensurePanelMessage(): Promise<void> {
     .setDescription(
       [
         "ボタンを押すと、あなただけの作業チャンネルを作成します。",
-        "そのチャンネルでLLMと会話しながら、Codex/Claude向けの指示文を作成できます。",
+        "そのチャンネルでLLMと会話しながら、Codex/Claude向けの指示文を作成し、実行します。",
       ].join("\n"),
     )
     .setColor(0x2f81f7);
