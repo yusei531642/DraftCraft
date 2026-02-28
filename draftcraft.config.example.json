@@ -1,0 +1,24 @@
+{
+  "llm": {
+    "provider": "ollama",
+    "model": "llama3.1:8b",
+    "ollamaBaseUrl": "http://127.0.0.1:11434",
+    "lmstudioBaseUrl": "http://127.0.0.1:1234/v1",
+    "openaiBaseUrl": "https://api.openai.com/v1",
+    "openaiApiKey": "",
+    "anthropicBaseUrl": "https://api.anthropic.com",
+    "anthropicApiKey": ""
+  },
+  "executor": {
+    "mode": "auto",
+    "codexCommandTemplate": "codex --no-alt-screen exec --ephemeral - < \"{PROMPT_FILE}\"",
+    "claudeCommandTemplate": "claude",
+    "workdir": "D:/program/creativebot",
+    "maxHistoryMessages": 30
+  },
+  "discord": {
+    "botToken": "",
+    "panelChannelId": "",
+    "sessionCategoryId": ""
+  }
+}

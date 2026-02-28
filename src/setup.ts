@@ -2,27 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { loadCliConfig } from "./config";
+import {
+  CONFIG_PATH,
+  createDefaultConfigFile,
+  loadCliConfig,
+  readConfigFile,
+  type DraftcraftConfigFile,
+  writeConfigFile,
+} from "./config";
 import { type ExecutorMode } from "./executor";
 import { type LlmProvider } from "./llm";
 
-const ENV_PATH = path.resolve(process.cwd(), ".env");
-
-type SetupResult = {
-  provider: LlmProvider;
-  model: string;
-  ollamaBaseUrl: string;
-  lmstudioBaseUrl: string;
-  openaiBaseUrl: string;
-  openaiApiKey: string;
-  anthropicBaseUrl: string;
-  anthropicApiKey: string;
-  executorMode: ExecutorMode;
-  codexCommandTemplate: string;
-  claudeCommandTemplate: string;
-  codexWorkdir: string;
-  maxHistoryMessages: number;
-};
+const LEGACY_ENV_PATH = path.resolve(process.cwd(), ".env");
 
 function parseEnvFile(content: string): Map<string, string> {
   const map = new Map<string, string>();
@@ -51,6 +42,53 @@ function parseExecutorMode(raw: string): ExecutorMode | null {
     return raw;
   }
   return null;
+}
+
+function pickLegacy(map: Map<string, string>, key: string): string {
+  return (map.get(key) ?? "").trim();
+}
+
+function loadDefaultsFromLegacyEnv(base: DraftcraftConfigFile): DraftcraftConfigFile {
+  if (!fs.existsSync(LEGACY_ENV_PATH)) {
+    return base;
+  }
+  const env = parseEnvFile(fs.readFileSync(LEGACY_ENV_PATH, "utf8"));
+  return {
+    llm: {
+      provider: (pickLegacy(env, "LLM_PROVIDER") as LlmProvider) || base.llm.provider,
+      model: pickLegacy(env, "LLM_MODEL") || pickLegacy(env, "OLLAMA_MODEL") || base.llm.model,
+      ollamaBaseUrl: pickLegacy(env, "OLLAMA_BASE_URL") || base.llm.ollamaBaseUrl,
+      lmstudioBaseUrl: pickLegacy(env, "LMSTUDIO_BASE_URL") || base.llm.lmstudioBaseUrl,
+      openaiBaseUrl: pickLegacy(env, "OPENAI_BASE_URL") || base.llm.openaiBaseUrl,
+      openaiApiKey: pickLegacy(env, "OPENAI_API_KEY") || base.llm.openaiApiKey,
+      anthropicBaseUrl: pickLegacy(env, "ANTHROPIC_BASE_URL") || base.llm.anthropicBaseUrl,
+      anthropicApiKey: pickLegacy(env, "ANTHROPIC_API_KEY") || base.llm.anthropicApiKey,
+    },
+    executor: {
+      mode: (pickLegacy(env, "EXECUTOR_MODE") as ExecutorMode) || base.executor.mode,
+      codexCommandTemplate:
+        pickLegacy(env, "CODEX_COMMAND_TEMPLATE") || base.executor.codexCommandTemplate,
+      claudeCommandTemplate:
+        pickLegacy(env, "CLAUDE_COMMAND_TEMPLATE") || base.executor.claudeCommandTemplate,
+      workdir: pickLegacy(env, "CODEX_WORKDIR") || base.executor.workdir,
+      maxHistoryMessages:
+        Number.parseInt(pickLegacy(env, "MAX_HISTORY_MESSAGES"), 10) ||
+        base.executor.maxHistoryMessages,
+    },
+    discord: {
+      botToken: pickLegacy(env, "DISCORD_BOT_TOKEN") || base.discord.botToken,
+      panelChannelId: pickLegacy(env, "PANEL_CHANNEL_ID") || base.discord.panelChannelId,
+      sessionCategoryId: pickLegacy(env, "SESSION_CATEGORY_ID") || base.discord.sessionCategoryId,
+    },
+  };
+}
+
+function loadSetupDefaults(): DraftcraftConfigFile {
+  const existing = readConfigFile();
+  if (existing) {
+    return existing;
+  }
+  return loadDefaultsFromLegacyEnv(createDefaultConfigFile(process.cwd()));
 }
 
 async function askWithDefault(
@@ -96,176 +134,86 @@ async function askProvider(rl: readline.Interface, current: LlmProvider): Promis
   return "ollama";
 }
 
-function toEnvValue(value: string): string {
-  return value.replace(/\r?\n/g, " ").trim();
-}
-
-function applyEnv(entries: Record<string, string>): void {
-  for (const [key, value] of Object.entries(entries)) {
-    process.env[key] = value;
-  }
-}
-
-function buildEnvText(existing: Map<string, string>, next: SetupResult): string {
-  const knownKeys = new Set<string>([
-    "LLM_PROVIDER",
-    "LLM_MODEL",
-    "OLLAMA_BASE_URL",
-    "LMSTUDIO_BASE_URL",
-    "OPENAI_BASE_URL",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_API_KEY",
-    "EXECUTOR_MODE",
-    "CODEX_COMMAND_TEMPLATE",
-    "CLAUDE_COMMAND_TEMPLATE",
-    "CODEX_WORKDIR",
-    "MAX_HISTORY_MESSAGES",
-  ]);
-
-  const lines: string[] = [];
-  lines.push("# LLMDraft settings");
-  lines.push(`LLM_PROVIDER=${toEnvValue(next.provider)}`);
-  lines.push(`LLM_MODEL=${toEnvValue(next.model)}`);
-  lines.push(`OLLAMA_BASE_URL=${toEnvValue(next.ollamaBaseUrl)}`);
-  lines.push(`LMSTUDIO_BASE_URL=${toEnvValue(next.lmstudioBaseUrl)}`);
-  lines.push(`OPENAI_BASE_URL=${toEnvValue(next.openaiBaseUrl)}`);
-  lines.push(`OPENAI_API_KEY=${toEnvValue(next.openaiApiKey)}`);
-  lines.push(`ANTHROPIC_BASE_URL=${toEnvValue(next.anthropicBaseUrl)}`);
-  lines.push(`ANTHROPIC_API_KEY=${toEnvValue(next.anthropicApiKey)}`);
-  lines.push(`EXECUTOR_MODE=${toEnvValue(next.executorMode)}`);
-  lines.push(`CODEX_COMMAND_TEMPLATE=${toEnvValue(next.codexCommandTemplate)}`);
-  lines.push(`CLAUDE_COMMAND_TEMPLATE=${toEnvValue(next.claudeCommandTemplate)}`);
-  lines.push(`CODEX_WORKDIR=${toEnvValue(next.codexWorkdir)}`);
-  lines.push(`MAX_HISTORY_MESSAGES=${next.maxHistoryMessages}`);
-
-  const discordKeys = ["DISCORD_BOT_TOKEN", "PANEL_CHANNEL_ID", "SESSION_CATEGORY_ID"];
-  const hasAnyDiscord = discordKeys.some((key) => existing.has(key));
-  lines.push("");
-  lines.push("# Discord (optional)");
-  if (hasAnyDiscord) {
-    for (const key of discordKeys) {
-      const value = existing.get(key) ?? "";
-      lines.push(`${key}=${toEnvValue(value)}`);
-    }
-  } else {
-    lines.push("DISCORD_BOT_TOKEN=");
-    lines.push("PANEL_CHANNEL_ID=");
-    lines.push("SESSION_CATEGORY_ID=");
-  }
-
-  const rest = [...existing.entries()]
-    .filter(([key]) => !knownKeys.has(key) && !discordKeys.includes(key))
-    .sort(([a], [b]) => a.localeCompare(b));
-  if (rest.length > 0) {
-    lines.push("");
-    lines.push("# Existing custom keys");
-    for (const [key, value] of rest) {
-      lines.push(`${key}=${toEnvValue(value)}`);
-    }
-  }
-
-  return `${lines.join("\n")}\n`;
-}
-
 async function runSetup(): Promise<void> {
-  const existing = fs.existsSync(ENV_PATH)
-    ? parseEnvFile(fs.readFileSync(ENV_PATH, "utf8"))
-    : new Map<string, string>();
+  const defaults = loadSetupDefaults();
   const rl = readline.createInterface({ input, output, terminal: true });
 
   try {
     output.write("\n=== LLMDraft Setup ===\n");
     output.write("初回セットアップを開始します。\n");
+    output.write(`保存先: ${CONFIG_PATH}\n`);
 
-    const currentProvider = (existing.get("LLM_PROVIDER") as LlmProvider | undefined) ?? "ollama";
-    const provider = await askProvider(rl, currentProvider);
+    const provider = await askProvider(rl, defaults.llm.provider);
     const model = await askWithDefault(
       rl,
       "モデル名",
-      existing.get("LLM_MODEL") ?? askProviderDefaultModel(provider),
+      defaults.llm.model || askProviderDefaultModel(provider),
     );
 
-    const ollamaBaseUrl = await askWithDefault(
-      rl,
-      "Ollama Base URL",
-      existing.get("OLLAMA_BASE_URL") ?? "http://127.0.0.1:11434",
-    );
+    const ollamaBaseUrl = await askWithDefault(rl, "Ollama Base URL", defaults.llm.ollamaBaseUrl);
     const lmstudioBaseUrl = await askWithDefault(
       rl,
       "LM Studio Base URL",
-      existing.get("LMSTUDIO_BASE_URL") ?? "http://127.0.0.1:1234/v1",
+      defaults.llm.lmstudioBaseUrl,
     );
-    const openaiBaseUrl = await askWithDefault(
-      rl,
-      "OpenAI Base URL",
-      existing.get("OPENAI_BASE_URL") ?? "https://api.openai.com/v1",
-    );
+    const openaiBaseUrl = await askWithDefault(rl, "OpenAI Base URL", defaults.llm.openaiBaseUrl);
     const anthropicBaseUrl = await askWithDefault(
       rl,
       "Anthropic Base URL",
-      existing.get("ANTHROPIC_BASE_URL") ?? "https://api.anthropic.com",
+      defaults.llm.anthropicBaseUrl,
     );
 
-    const openaiApiKey = await askSecret(
-      rl,
-      "OPENAI_API_KEY",
-      existing.get("OPENAI_API_KEY") ?? "",
-    );
-    const anthropicApiKey = await askSecret(
-      rl,
-      "ANTHROPIC_API_KEY",
-      existing.get("ANTHROPIC_API_KEY") ?? "",
-    );
+    const openaiApiKey = await askSecret(rl, "OPENAI_API_KEY", defaults.llm.openaiApiKey);
+    const anthropicApiKey = await askSecret(rl, "ANTHROPIC_API_KEY", defaults.llm.anthropicApiKey);
 
     const modeRaw = await askWithDefault(
       rl,
       "実行モード (codex/claude/auto)",
-      existing.get("EXECUTOR_MODE") ?? "auto",
+      defaults.executor.mode,
     );
-    const parsedMode = parseExecutorMode(modeRaw.toLowerCase());
-    const executorMode = parsedMode ?? "auto";
+    const executorMode = parseExecutorMode(modeRaw.toLowerCase()) ?? defaults.executor.mode;
 
     const codexCommandTemplate = await askWithDefault(
       rl,
       "CODEX_COMMAND_TEMPLATE",
-      existing.get("CODEX_COMMAND_TEMPLATE") ?? "codex",
+      defaults.executor.codexCommandTemplate || "codex",
     );
     const claudeCommandTemplate = await askWithDefault(
       rl,
       "CLAUDE_COMMAND_TEMPLATE",
-      existing.get("CLAUDE_COMMAND_TEMPLATE") ?? "claude",
+      defaults.executor.claudeCommandTemplate || "claude",
     );
-    const codexWorkdir = await askWithDefault(
-      rl,
-      "CODEX_WORKDIR",
-      existing.get("CODEX_WORKDIR") ?? process.cwd(),
-    );
+    const codexWorkdir = await askWithDefault(rl, "CODEX_WORKDIR", defaults.executor.workdir);
     const maxHistoryRaw = await askWithDefault(
       rl,
       "MAX_HISTORY_MESSAGES",
-      existing.get("MAX_HISTORY_MESSAGES") ?? "30",
+      String(defaults.executor.maxHistoryMessages),
     );
-    const parsedHistory = Number(maxHistoryRaw);
+    const parsedHistory = Number.parseInt(maxHistoryRaw, 10);
     const maxHistoryMessages =
       Number.isInteger(parsedHistory) && parsedHistory >= 10 && parsedHistory <= 200
         ? parsedHistory
-        : 30;
+        : defaults.executor.maxHistoryMessages;
 
-    const result: SetupResult = {
-      provider,
-      model,
-      ollamaBaseUrl,
-      lmstudioBaseUrl,
-      openaiBaseUrl,
-      openaiApiKey,
-      anthropicBaseUrl,
-      anthropicApiKey,
-      executorMode,
-      codexCommandTemplate,
-      claudeCommandTemplate,
-      codexWorkdir,
-      maxHistoryMessages,
+    const result: DraftcraftConfigFile = {
+      llm: {
+        provider,
+        model,
+        ollamaBaseUrl,
+        lmstudioBaseUrl,
+        openaiBaseUrl,
+        openaiApiKey,
+        anthropicBaseUrl,
+        anthropicApiKey,
+      },
+      executor: {
+        mode: executorMode,
+        codexCommandTemplate,
+        claudeCommandTemplate,
+        workdir: codexWorkdir,
+        maxHistoryMessages,
+      },
+      discord: defaults.discord,
     };
 
     const confirm = (await rl.question("この設定で保存しますか？ (Y/n): ")).trim().toLowerCase();
@@ -273,37 +221,27 @@ async function runSetup(): Promise<void> {
       throw new Error("セットアップをキャンセルしました。");
     }
 
-    const text = buildEnvText(existing, result);
-    fs.writeFileSync(ENV_PATH, text, "utf8");
-    applyEnv({
-      LLM_PROVIDER: result.provider,
-      LLM_MODEL: result.model,
-      OLLAMA_BASE_URL: result.ollamaBaseUrl,
-      LMSTUDIO_BASE_URL: result.lmstudioBaseUrl,
-      OPENAI_BASE_URL: result.openaiBaseUrl,
-      OPENAI_API_KEY: result.openaiApiKey,
-      ANTHROPIC_BASE_URL: result.anthropicBaseUrl,
-      ANTHROPIC_API_KEY: result.anthropicApiKey,
-      EXECUTOR_MODE: result.executorMode,
-      CODEX_COMMAND_TEMPLATE: result.codexCommandTemplate,
-      CLAUDE_COMMAND_TEMPLATE: result.claudeCommandTemplate,
-      CODEX_WORKDIR: result.codexWorkdir,
-      MAX_HISTORY_MESSAGES: String(result.maxHistoryMessages),
-    });
-
-    output.write(`\n保存しました: ${ENV_PATH}\n\n`);
+    writeConfigFile(result);
+    output.write(`\n保存しました: ${CONFIG_PATH}\n\n`);
   } finally {
     rl.close();
   }
 }
 
-export async function ensureCliSetup(): Promise<void> {
-  const hasInlineConfig =
-    !!process.env.LLM_MODEL &&
-    (!!process.env.CODEX_COMMAND_TEMPLATE || !!process.env.CLAUDE_COMMAND_TEMPLATE);
+function migrateLegacyEnvToJson(): boolean {
+  if (fs.existsSync(CONFIG_PATH) || !fs.existsSync(LEGACY_ENV_PATH)) {
+    return false;
+  }
 
-  if (!fs.existsSync(ENV_PATH)) {
-    if (hasInlineConfig) {
+  const migrated = loadDefaultsFromLegacyEnv(createDefaultConfigFile(process.cwd()));
+  writeConfigFile(migrated);
+  output.write(`\n旧設定 .env を検出したため ${CONFIG_PATH} へ移行しました。\n`);
+  return true;
+}
+
+export async function ensureCliSetup(): Promise<void> {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    if (migrateLegacyEnvToJson()) {
       return;
     }
     await runSetup();

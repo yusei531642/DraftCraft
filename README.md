@@ -46,8 +46,9 @@ npm install
 npm run start
 ```
 
-初回起動時は自動でSetupが始まり、`.env` を生成します。  
-手動で設定したい場合は `.env.example` をコピーして編集してください。
+初回起動時は自動でSetupが始まり、`draftcraft.config.json` を生成します。  
+手動で設定したい場合は `draftcraft.config.example.json` をコピーして編集してください。
+既存の `.env` がある場合は、起動時に自動でJSONへ移行します。
 
 ## インストール（CLI配布）
 
@@ -82,32 +83,35 @@ npm run dev:bot
 npm run start:bot
 ```
 
-## 環境変数
+## 設定ファイル（JSON）
 
-主要設定（`.env`）:
+主要設定（`draftcraft.config.json`）:
 
-```env
-# LLM provider: ollama | lmstudio | openai | anthropic
-LLM_PROVIDER=ollama
-LLM_MODEL=llama3.1:8b
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_API_KEY=
-ANTHROPIC_BASE_URL=https://api.anthropic.com
-ANTHROPIC_API_KEY=
-
-# Executor: codex | claude | auto
-EXECUTOR_MODE=auto
-CODEX_COMMAND_TEMPLATE=codex
-CLAUDE_COMMAND_TEMPLATE=claude
-CODEX_WORKDIR=D:/program/creativebot
-MAX_HISTORY_MESSAGES=30
-
-# Discord (optional)
-DISCORD_BOT_TOKEN=
-PANEL_CHANNEL_ID=
-SESSION_CATEGORY_ID=
+```json
+{
+  "llm": {
+    "provider": "ollama",
+    "model": "llama3.1:8b",
+    "ollamaBaseUrl": "http://127.0.0.1:11434",
+    "lmstudioBaseUrl": "http://127.0.0.1:1234/v1",
+    "openaiBaseUrl": "https://api.openai.com/v1",
+    "openaiApiKey": "",
+    "anthropicBaseUrl": "https://api.anthropic.com",
+    "anthropicApiKey": ""
+  },
+  "executor": {
+    "mode": "auto",
+    "codexCommandTemplate": "codex --no-alt-screen exec --ephemeral - < \"{PROMPT_FILE}\"",
+    "claudeCommandTemplate": "claude",
+    "workdir": "D:/program/creativebot",
+    "maxHistoryMessages": 30
+  },
+  "discord": {
+    "botToken": "",
+    "panelChannelId": "",
+    "sessionCategoryId": ""
+  }
+}
 ```
 
 ## 実行テンプレート仕様
@@ -118,7 +122,7 @@ SESSION_CATEGORY_ID=
 - `{PROMPT_FILE}`: 生成プロンプトファイル
 - `{CHANNEL_ID}`: セッションID（CLIでは `cli-session`）
 - `{OWNER_ID}`: ユーザーID（CLIでは `cli-user`）
-- `{WORKDIR}`: `CODEX_WORKDIR`
+- `{WORKDIR}`: `executor.workdir`
 
 実行時に渡される環境変数:
 
@@ -158,15 +162,15 @@ SESSION_CATEGORY_ID=
 ## トラブルシューティング
 
 - LLM接続エラー:
-  - `LLM_PROVIDER` と各Base URL / API Keyを確認
+  - `draftcraft.config.json` の `llm` 設定を確認
 - 実行器起動エラー:
-  - `CODEX_COMMAND_TEMPLATE` または `CLAUDE_COMMAND_TEMPLATE` のコマンド単体実行を確認
+  - `executor.codexCommandTemplate` または `executor.claudeCommandTemplate` のコマンド単体実行を確認
 - Discordコマンドが出ない:
   - Botを再起動し、権限（`applications.commands`）を確認
 
 ## セキュリティ注意
 
-- `.env` は絶対に公開しないでください
+- `draftcraft.config.json` は絶対に公開しないでください
 - APIキーは漏えい時にすぐローテーションしてください
 - 公開時は `outputs/` のログに秘密情報が含まれていないか確認してください
 
