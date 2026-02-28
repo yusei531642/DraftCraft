@@ -15,6 +15,14 @@ import { LlmClient, type ChatMessage } from "./llm";
 import { resolveProjectContext } from "./project-context";
 import { ensureCliSetup } from "./setup";
 
+const ANSI = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  magenta: "\x1b[38;5;205m",
+  cyan: "\x1b[36m",
+};
+
 const SYSTEM_PROMPT = [
   "あなたはユーザーと一緒に、CodexCLIやClaude Codeに渡す実装指示文を作るアシスタントです。",
   "ユーザーの意図を確認し、曖昧な部分は質問し、具体的な手順と完了条件が含まれる指示文へ改善してください。",
@@ -40,6 +48,7 @@ type CliState = {
   history: ChatMessage[];
   executorMode: ExecutorMode;
   projectContextCache: Map<string, string>;
+  thinkingLevel: "normal" | "deep";
   latestPromptPath: string | null;
   latestPromptText: string | null;
 };
@@ -84,14 +93,46 @@ async function buildFinalPrompt(
 
 function printHelp(): void {
   output.write("\n");
-  output.write("コマンド:\n");
+  output.write("Shortcuts:\n");
+  output.write("  ?          ショートカット表示\n");
   output.write("  /help      ヘルプを表示\n");
   output.write("  /engine    実行モード表示 (codex / claude / auto)\n");
   output.write("  /engine X  実行モード変更 (X: codex|claude|auto)\n");
+  output.write("  /thinking  Thinkingレベル切替 (normal/deep)\n");
   output.write("  /reset     会話履歴を初期化\n");
   output.write("  /finalize  最終指示文を生成して保存\n");
   output.write("  /run       最終指示文を生成して実行器を起動\n");
   output.write("  /exit      CLIを終了\n");
+  output.write("\n");
+}
+
+function line(width: number): string {
+  return "-".repeat(Math.max(20, width));
+}
+
+function renderStatusLine(state: CliState, width: number): void {
+  const left = "? for shortcuts";
+  const right = `Thinking ${state.thinkingLevel} (/thinking to toggle)`;
+  const spaces = Math.max(1, width - left.length - right.length);
+  output.write(`${ANSI.dim}${left}${" ".repeat(spaces)}${right}${ANSI.reset}\n`);
+}
+
+function renderCliFrame(
+  configModel: string,
+  configProvider: string,
+  configWorkdir: string,
+  state: CliState,
+): void {
+  const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
+  output.write(`${ANSI.magenta}[##]${ANSI.reset} ${ANSI.bold}LLMdraft CLI v1${ANSI.reset}\n`);
+  output.write(
+    `${ANSI.dim}${configProvider.toUpperCase()} agent ${ANSI.reset}${ANSI.cyan}${configModel}${ANSI.reset}\n`,
+  );
+  output.write(`${ANSI.dim}${configWorkdir}${ANSI.reset}\n`);
+  output.write(`${ANSI.dim}${line(width)}${ANSI.reset}\n`);
+  output.write("Hi! How can I help you today?\n\n");
+  output.write(`${ANSI.dim}${line(width)}${ANSI.reset}\n`);
+  renderStatusLine(state, width);
   output.write("\n");
 }
 
@@ -155,30 +196,36 @@ export async function startCli(): Promise<void> {
     history: [{ role: "system", content: SYSTEM_PROMPT }],
     executorMode: config.executorMode,
     projectContextCache: new Map<string, string>(),
+    thinkingLevel: "normal",
     latestPromptPath: null,
     latestPromptText: null,
   };
 
   output.write(`${BANNER}\n`);
-  output.write("LLMdraft CLI\n");
-  output.write(`provider: ${config.llm.provider}\n`);
-  output.write(`model: ${config.llm.model}\n`);
-  output.write(`executor mode: ${state.executorMode}\n`);
-  output.write("入力した内容は選択したLLMと対話しながら指示文に育てられます。\n");
-  printHelp();
+  renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir, state);
 
   const rl = readline.createInterface({ input, output, terminal: true });
 
   try {
     while (true) {
-      const line = (await rl.question("you> ")).trim();
+      const line = (await rl.question("> ")).trim();
       if (!line) {
+        continue;
+      }
+
+      if (line === "?") {
+        printHelp();
         continue;
       }
 
       if (line.startsWith("/")) {
         if (line === "/help") {
           printHelp();
+          continue;
+        }
+        if (line === "/thinking") {
+          state.thinkingLevel = state.thinkingLevel === "normal" ? "deep" : "normal";
+          output.write(`Thinkingレベルを ${state.thinkingLevel} に変更しました。\n\n`);
           continue;
         }
         if (line === "/engine") {

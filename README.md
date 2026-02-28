@@ -128,9 +128,11 @@ npm run start:bot
 
 ## CLIコマンド
 
+- `?` ショートカット表示
 - `/help` ヘルプ表示
 - `/engine` 実行モード表示
 - `/engine codex|claude|auto` 実行モード変更
+- `/thinking` Thinkingレベル切替
 - `/reset` 会話履歴を初期化
 - `/finalize` 最終指示文を生成して保存
 - `/run` 最終指示文を生成して実行器起動
