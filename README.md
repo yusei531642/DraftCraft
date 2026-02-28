@@ -49,6 +49,21 @@ npm run start
 初回起動時は自動でSetupが始まり、`.env` を生成します。  
 手動で設定したい場合は `.env.example` をコピーして編集してください。
 
+## インストール（CLI配布）
+
+グローバルインストール:
+
+```bash
+npm i -g draftcraft
+llmcraft
+```
+
+`npx` で単発実行:
+
+```bash
+npx draftcraft
+```
+
 ## 起動方法
 
 CLI（メイン）:
@@ -119,6 +134,8 @@ SESSION_CATEGORY_ID=
 - `/help` ヘルプ
 - `/engine` 実行モード表示
 - `/engine codex|claude|auto` 実行モード変更
+- `/autorun` 自動裏実行の状態表示
+- `/autorun on|off` 自動裏実行の切替
 - `/thinking` Thinkingレベル切替
 - `/reset` 会話履歴初期化
 - `/finalize` 最終指示文を生成して保存
