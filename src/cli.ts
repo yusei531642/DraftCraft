@@ -48,16 +48,32 @@ const SLASH_COMMAND_HELP: Record<(typeof SLASH_COMMANDS)[number], string> = {
 };
 
 const SYSTEM_PROMPT = [
-  "あなたはユーザーと一緒に、CodexCLIやClaude Codeに渡す実装指示文を作るアシスタントです。",
-  "ユーザーの意図を確認し、曖昧な部分は質問し、具体的な手順と完了条件が含まれる指示文へ改善してください。",
-  "日本語で簡潔に回答してください。",
+  "あなたはユーザーの意図を、CodexCLIやClaude Code向けに翻訳する通訳・編集アシスタントです。",
+  "あなた自身が仕様を決めたり修正を断定せず、ユーザーの意図を忠実に整理してください。",
+  "不足情報があっても、まず実行可能な暫定指示文を作り、必要な確認点は末尾に短く添えてください。",
+  "ユーザーへ一方的に情報提供を要求する質問票だけを返してはいけません。",
+  "日本語でやさしく簡潔に回答してください。",
 ].join("\n");
 
 const FINALIZER_SYSTEM_PROMPT = [
-  "あなたは会話ログから、実行器へ渡す最終指示文を1つに統合するエディタです。",
+  "あなたは会話ログから、実行器へ渡す最終指示文を1つに統合する通訳エディタです。",
+  "役割は通訳であり、要求元ユーザーに質問を返すことではありません。",
+  "不足情報は [要確認] として明記し、作業の進め方を止めない形で指示文に残してください。",
   "出力は最終指示文のみを返してください。",
   "日本語で、目的・要件・制約・完了条件が明確になるように書いてください。",
 ].join("\n");
+
+function looksLikeQuestionnaire(text: string): boolean {
+  const patterns = [
+    /ご提供ください/u,
+    /教えてください/u,
+    /情報を(提供|共有)してください/u,
+    /必要な情報/u,
+    /以下の情報/u,
+    /届いた時点/u,
+  ];
+  return patterns.some((pattern) => pattern.test(text));
+}
 
 const BANNER = String.raw`
  _      _      __  __     ____            __ _   
@@ -107,10 +123,26 @@ async function buildFinalPrompt(
     throw new Error("会話履歴が空のため、最終指示文を生成できません。");
   }
 
-  const prompt = await llm.chat([
+  let prompt = await llm.chat([
     { role: "system", content: FINALIZER_SYSTEM_PROMPT },
     { role: "user", content: historyText },
   ]);
+
+  if (looksLikeQuestionnaire(prompt)) {
+    prompt = await llm.chat([
+      {
+        role: "system",
+        content: [
+          "あなたは通訳エディタです。",
+          "次の文章はユーザー向け質問票になっている可能性があります。",
+          "質問票ではなく、実行器がすぐ作業できる指示文へ書き換えてください。",
+          "不足情報は [要確認] を使って残し、作業手順は止めないでください。",
+          "出力は指示文本文のみ。",
+        ].join("\n"),
+      },
+      { role: "user", content: prompt },
+    ]);
+  }
 
   return { prompt, historyText };
 }
