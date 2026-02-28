@@ -13,6 +13,7 @@ import {
   type TextChannel,
 } from "discord.js";
 import { loadDiscordConfig, type DiscordConfig } from "./config";
+import { explainExecutorResult } from "./explain";
 import {
   executorLabel,
   runSelectedExecutor,
@@ -21,6 +22,7 @@ import {
   type ExecutorMode,
 } from "./executor";
 import { LlmClient, type ChatMessage } from "./llm";
+import { resolveProjectContext } from "./project-context";
 
 const CREATE_SESSION_BUTTON_ID = "draftcraft:create-session";
 const FINALIZE_BUTTON_ID = "draftcraft:finalize";
@@ -52,6 +54,7 @@ const APP_COMMAND_DEFINITIONS = [
 type DraftSession = {
   ownerId: string;
   executorMode: ExecutorMode;
+  projectContextCache: Map<string, string>;
   history: ChatMessage[];
   finalizing: boolean;
 };
@@ -138,6 +141,7 @@ function ensureSession(channel: TextChannel): DraftSession | null {
   const created: DraftSession = {
     ownerId,
     executorMode: config.executorMode,
+    projectContextCache: new Map<string, string>(),
     history: [{ role: "system", content: SYSTEM_PROMPT }],
     finalizing: false,
   };
@@ -246,6 +250,7 @@ async function createSessionChannel(guildId: string, ownerId: string): Promise<T
   const session: DraftSession = {
     ownerId,
     executorMode: config.executorMode,
+    projectContextCache: new Map<string, string>(),
     history: [{ role: "system", content: SYSTEM_PROMPT }],
     finalizing: false,
   };
@@ -295,7 +300,32 @@ async function callLlmForChat(channel: TextChannel, userContent: string): Promis
 
   processingChannels.add(channel.id);
   try {
-    session.history.push({ role: "user", content: userContent });
+    let enrichedUserContent = userContent;
+    try {
+      const projectContext = await resolveProjectContext({
+        messageContent: userContent,
+        llm,
+        executorMode: session.executorMode,
+        codexCommandTemplate: config.codexCommandTemplate,
+        claudeCommandTemplate: config.claudeCommandTemplate,
+        workdir: config.codexWorkdir,
+        outputsDir: config.outputsDir,
+        ownerId: session.ownerId,
+        sessionId: channel.id,
+        cache: session.projectContextCache,
+      });
+      if (projectContext.contextText) {
+        enrichedUserContent = `${userContent}\n\n[補足: プロジェクト理解メモ]\n${projectContext.contextText}`;
+        await channel.send(
+          `プロジェクト情報を確認しました: ${projectContext.resolvedProjects.join(", ")}`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "不明なエラーです。";
+      await channel.send(`プロジェクト調査に失敗したため通常応答で続行します。\n${message}`);
+    }
+
+    session.history.push({ role: "user", content: enrichedUserContent });
     session.history = trimHistory(session.history, config.maxHistoryMessages);
     await channel.sendTyping();
     const response = await llm.chat(session.history);
@@ -417,6 +447,15 @@ async function finalizeAndRun(
             `log: \`${logFilePath}\``,
           ].join("\n"),
         );
+
+        const logText = fs.existsSync(logFilePath) ? fs.readFileSync(logFilePath, "utf8") : "";
+        const simpleExplanation = await explainExecutorResult({
+          llm,
+          executorLabel: executorLabel(selected.executor),
+          exitCode: code,
+          logText,
+        });
+        await sendLongMessage(channel, simpleExplanation);
       },
     });
 
@@ -462,6 +501,7 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.commandName === "reset") {
       session.history = [{ role: "system", content: SYSTEM_PROMPT }];
+      session.projectContextCache.clear();
       await interaction.reply({ content: "会話履歴を初期化しました。", ephemeral: true });
       return;
     }

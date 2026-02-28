@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { loadCliConfig } from "./config";
+import { explainExecutorResult } from "./explain";
 import {
   executorLabel,
   runSelectedExecutor,
@@ -11,6 +12,7 @@ import {
   type ExecutorMode,
 } from "./executor";
 import { LlmClient, type ChatMessage } from "./llm";
+import { resolveProjectContext } from "./project-context";
 import { ensureCliSetup } from "./setup";
 
 const SYSTEM_PROMPT = [
@@ -37,6 +39,7 @@ const BANNER = String.raw`
 type CliState = {
   history: ChatMessage[];
   executorMode: ExecutorMode;
+  projectContextCache: Map<string, string>;
   latestPromptPath: string | null;
   latestPromptText: string | null;
 };
@@ -151,6 +154,7 @@ export async function startCli(): Promise<void> {
   const state: CliState = {
     history: [{ role: "system", content: SYSTEM_PROMPT }],
     executorMode: config.executorMode,
+    projectContextCache: new Map<string, string>(),
     latestPromptPath: null,
     latestPromptText: null,
   };
@@ -194,6 +198,7 @@ export async function startCli(): Promise<void> {
         }
         if (line === "/reset") {
           state.history = [{ role: "system", content: SYSTEM_PROMPT }];
+          state.projectContextCache.clear();
           state.latestPromptPath = null;
           state.latestPromptText = null;
           output.write("会話履歴を初期化しました。\n\n");
@@ -245,6 +250,17 @@ export async function startCli(): Promise<void> {
             output.write(`prompt: ${promptFilePath}\n`);
             output.write(`log: ${result.logFilePath}\n`);
             output.write(`exit code: ${result.exitCode === null ? "null" : result.exitCode}\n\n`);
+
+            const logText = fs.existsSync(result.logFilePath)
+              ? fs.readFileSync(result.logFilePath, "utf8")
+              : "";
+            const simpleExplanation = await explainExecutorResult({
+              llm,
+              executorLabel: executorLabel(selected.executor),
+              exitCode: result.exitCode,
+              logText,
+            });
+            output.write(`${simpleExplanation}\n\n`);
           } catch (error) {
             const message = error instanceof Error ? error.message : "不明なエラーです。";
             output.write(`実行に失敗しました: ${message}\n\n`);
@@ -260,7 +276,32 @@ export async function startCli(): Promise<void> {
         continue;
       }
 
-      state.history.push({ role: "user", content: line });
+      let userContent = line;
+      try {
+        const projectContext = await resolveProjectContext({
+          messageContent: line,
+          llm,
+          executorMode: state.executorMode,
+          codexCommandTemplate: config.codexCommandTemplate,
+          claudeCommandTemplate: config.claudeCommandTemplate,
+          workdir: config.codexWorkdir,
+          outputsDir: config.outputsDir,
+          ownerId: "cli-user",
+          sessionId: "cli-session",
+          cache: state.projectContextCache,
+        });
+        if (projectContext.contextText) {
+          userContent = `${line}\n\n[補足: プロジェクト理解メモ]\n${projectContext.contextText}`;
+          output.write(
+            `project> ${projectContext.resolvedProjects.join(", ")} を実行器に確認して理解した上で続行します。\n`,
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "不明なエラーです。";
+        output.write(`project> プロジェクト調査に失敗したため通常応答で続行します: ${message}\n`);
+      }
+
+      state.history.push({ role: "user", content: userContent });
       state.history = trimHistory(state.history, config.maxHistoryMessages);
 
       try {
