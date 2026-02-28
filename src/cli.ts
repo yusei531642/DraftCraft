@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as readline from "node:readline";
 import readlinePromises from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { loadCliConfig } from "./config";
@@ -138,24 +137,6 @@ function buildStatusLine(state: CliState, width: number): string {
   return `${left}${" ".repeat(spaces)}${right}`;
 }
 
-function fitToWidth(text: string, width: number): string {
-  if (text.length === width) return text;
-  if (text.length < width) return text + " ".repeat(width - text.length);
-  if (width <= 3) return text.slice(0, width);
-  return `${text.slice(0, width - 3)}...`;
-}
-
-function buildFooterLine(state: CliState, width: number, currentInput: string): string {
-  if (currentInput.startsWith("/")) {
-    const hits = SLASH_COMMANDS.filter((command) => command.startsWith(currentInput));
-    if (hits.length === 0) {
-      return fitToWidth("候補: なし", width);
-    }
-    return fitToWidth(`候補: ${hits.join("  ")}`, width);
-  }
-  return fitToWidth(buildStatusLine(state, width), width);
-}
-
 function renderCliFrame(
   configModel: string,
   configProvider: string,
@@ -172,149 +153,35 @@ function renderCliFrame(
 }
 
 async function askInActiveBox(
-  rlFallback: readlinePromises.Interface,
+  rl: readlinePromises.Interface,
   state: CliState,
 ): Promise<{ lineInput: string; width: number }> {
-  const stdin = input as NodeJS.ReadStream;
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
-
-  if (!process.stdout.isTTY || !stdin.isTTY || typeof stdin.setRawMode !== "function") {
-    const lineInput = (await rlFallback.question("| > ")).trim();
+  const isTty = process.stdout.isTTY && (input as NodeJS.ReadStream).isTTY;
+  if (!isTty) {
+    output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
+    const lineInput = (await rl.question("| > ")).trim();
+    output.write(`${ANSI.dim}${buildStatusLine(state, width)}${ANSI.reset}\n`);
+    output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n\n`);
     return { lineInput, width };
   }
 
-  readline.emitKeypressEvents(stdin);
-  const wasRaw = stdin.isRaw;
-  if (!wasRaw) {
-    stdin.setRawMode(true);
-  }
-
-  let buffer = "";
-  let cursor = 0;
-
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  output.write("| >\n");
-  output.write(`${ANSI.dim}${buildFooterLine(state, width, buffer)}${ANSI.reset}\n`);
+  output.write("| > \n");
+  output.write(`${ANSI.dim}${buildStatusLine(state, width)}${ANSI.reset}\n`);
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-
-  const redraw = (): void => {
-    // Move to input line.
-    readline.moveCursor(output, 0, -3);
-    readline.cursorTo(output, 0);
-    readline.clearLine(output, 0);
-    output.write(`| > ${buffer}`);
-
-    // Draw footer line (command candidates or default status).
-    readline.moveCursor(output, 0, 1);
-    readline.cursorTo(output, 0);
-    readline.clearLine(output, 0);
-    output.write(`${ANSI.dim}${buildFooterLine(state, width, buffer)}${ANSI.reset}`);
-
-    // Return to input line and set cursor position.
-    readline.moveCursor(output, 0, -1);
-    readline.cursorTo(output, 4 + cursor);
-  };
-
-  redraw();
-
-  const lineInput = await new Promise<string>((resolve) => {
-    const onKeypress = (str: string, key: readline.Key): void => {
-      if (key.ctrl && key.name === "c") {
-        stdin.off("keypress", onKeypress);
-        if (!wasRaw) stdin.setRawMode(false);
-        output.write("\n");
-        process.exit(0);
-      }
-
-      if (key.name === "return" || key.name === "enter") {
-        stdin.off("keypress", onKeypress);
-        if (!wasRaw) stdin.setRawMode(false);
-        // Move below the box before returning.
-        readline.moveCursor(output, 0, 2);
-        readline.cursorTo(output, 0);
-        output.write("\n");
-        resolve(buffer.trim());
-        return;
-      }
-
-      if (key.name === "left") {
-        cursor = Math.max(0, cursor - 1);
-        redraw();
-        return;
-      }
-      if (key.name === "right") {
-        cursor = Math.min(buffer.length, cursor + 1);
-        redraw();
-        return;
-      }
-      if (key.name === "home") {
-        cursor = 0;
-        redraw();
-        return;
-      }
-      if (key.name === "end") {
-        cursor = buffer.length;
-        redraw();
-        return;
-      }
-      if (key.name === "backspace") {
-        if (cursor > 0) {
-          buffer = buffer.slice(0, cursor - 1) + buffer.slice(cursor);
-          cursor -= 1;
-          redraw();
-        }
-        return;
-      }
-      if (key.name === "delete") {
-        if (cursor < buffer.length) {
-          buffer = buffer.slice(0, cursor) + buffer.slice(cursor + 1);
-          redraw();
-        }
-        return;
-      }
-      if (key.name === "tab") {
-        if (buffer.startsWith("/")) {
-          const hits = SLASH_COMMANDS.filter((command) => command.startsWith(buffer));
-          if (hits.length === 1) {
-            const only = hits[0];
-            if (only) {
-              buffer = only;
-              cursor = buffer.length;
-            }
-          } else if (hits.length > 1) {
-            const hitStrings = hits.map((item) => item as string);
-            const commonPrefix = hitStrings.reduce((prefix, command) => {
-              let idx = 0;
-              while (
-                idx < prefix.length &&
-                idx < command.length &&
-                prefix[idx] === command[idx]
-              ) {
-                idx += 1;
-              }
-              return prefix.slice(0, idx);
-            }, hitStrings[0] ?? "");
-            if (commonPrefix.length > buffer.length) {
-              buffer = commonPrefix;
-              cursor = buffer.length;
-            }
-          }
-          redraw();
-        }
-        return;
-      }
-
-      if (str && !key.ctrl && !key.meta && str >= " ") {
-        buffer = buffer.slice(0, cursor) + str + buffer.slice(cursor);
-        cursor += str.length;
-        redraw();
-      }
-    };
-
-    stdin.on("keypress", onKeypress);
-  });
-
+  output.write("\x1b[3A\r| > ");
+  const lineInput = (await rl.question("")).trim();
+  output.write("\x1b[3B\r\n");
   return { lineInput, width };
+}
+
+function slashCommandCompleter(currentLine: string): [string[], string] {
+  if (!currentLine.startsWith("/")) {
+    return [[], currentLine];
+  }
+  const hits = SLASH_COMMANDS.filter((command) => command.startsWith(currentLine));
+  return [hits.length > 0 ? [...hits] : [...SLASH_COMMANDS], currentLine];
 }
 
 function printSlashCommandCandidates(prefix: string): void {
@@ -398,7 +265,12 @@ export async function startCli(): Promise<void> {
   output.write(`${BANNER}\n`);
   renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir);
 
-  const rl = readlinePromises.createInterface({ input, output, terminal: true });
+  const rl = readlinePromises.createInterface({
+    input,
+    output,
+    terminal: true,
+    completer: slashCommandCompleter,
+  });
 
   try {
     while (true) {
