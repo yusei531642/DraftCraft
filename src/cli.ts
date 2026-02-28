@@ -23,6 +23,26 @@ const ANSI = {
   cyan: "\x1b[36m",
 };
 
+const SLASH_COMMANDS = [
+  "/help",
+  "/engine",
+  "/thinking",
+  "/reset",
+  "/finalize",
+  "/run",
+  "/exit",
+] as const;
+
+const SLASH_COMMAND_HELP: Record<(typeof SLASH_COMMANDS)[number], string> = {
+  "/help": "ヘルプを表示",
+  "/engine": "実行モード表示/変更",
+  "/thinking": "Thinkingレベル切替",
+  "/reset": "会話履歴を初期化",
+  "/finalize": "最終指示文を生成して保存",
+  "/run": "最終指示文を生成して実行器を起動",
+  "/exit": "CLIを終了",
+};
+
 const SYSTEM_PROMPT = [
   "あなたはユーザーと一緒に、CodexCLIやClaude Codeに渡す実装指示文を作るアシスタントです。",
   "ユーザーの意図を確認し、曖昧な部分は質問し、具体的な手順と完了条件が含まれる指示文へ改善してください。",
@@ -106,13 +126,13 @@ function printHelp(): void {
   output.write("\n");
 }
 
-function line(width: number): string {
+function separatorLine(width: number): string {
   return "-".repeat(Math.max(20, width));
 }
 
 function renderStatusLine(state: CliState, width: number): void {
   const left = "? for shortcuts";
-  const right = `Thinking ${state.thinkingLevel} (/thinking to toggle)`;
+  const right = `Thinking ${state.thinkingLevel} | tab: command suggestions`;
   const spaces = Math.max(1, width - left.length - right.length);
   output.write(`${ANSI.dim}${left}${" ".repeat(spaces)}${right}${ANSI.reset}\n`);
 }
@@ -129,10 +149,31 @@ function renderCliFrame(
     `${ANSI.dim}${configProvider.toUpperCase()} agent ${ANSI.reset}${ANSI.cyan}${configModel}${ANSI.reset}\n`,
   );
   output.write(`${ANSI.dim}${configWorkdir}${ANSI.reset}\n`);
-  output.write(`${ANSI.dim}${line(width)}${ANSI.reset}\n`);
+  output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
   output.write("Hi! How can I help you today?\n\n");
-  output.write(`${ANSI.dim}${line(width)}${ANSI.reset}\n`);
+  output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
   renderStatusLine(state, width);
+  output.write("\n");
+}
+
+function slashCommandCompleter(currentLine: string): [string[], string] {
+  if (!currentLine.startsWith("/")) {
+    return [[], currentLine];
+  }
+  const hits = SLASH_COMMANDS.filter((command) => command.startsWith(currentLine));
+  return [hits.length > 0 ? [...hits] : [...SLASH_COMMANDS], currentLine];
+}
+
+function printSlashCommandCandidates(prefix: string): void {
+  const candidates = SLASH_COMMANDS.filter((command) => command.startsWith(prefix));
+  if (candidates.length === 0) {
+    output.write("候補がありません。`/help` で確認してください。\n\n");
+    return;
+  }
+  output.write("コマンド候補:\n");
+  for (const cmd of candidates) {
+    output.write(`  ${cmd.padEnd(10)} ${SLASH_COMMAND_HELP[cmd]}\n`);
+  }
   output.write("\n");
 }
 
@@ -204,36 +245,49 @@ export async function startCli(): Promise<void> {
   output.write(`${BANNER}\n`);
   renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir, state);
 
-  const rl = readline.createInterface({ input, output, terminal: true });
+  const rl = readline.createInterface({
+    input,
+    output,
+    terminal: true,
+    completer: slashCommandCompleter,
+  });
 
   try {
     while (true) {
-      const line = (await rl.question("> ")).trim();
-      if (!line) {
+      const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
+      output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
+      const lineInput = (await rl.question("> ")).trim();
+      output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
+
+      if (!lineInput) {
         continue;
       }
 
-      if (line === "?") {
+      if (lineInput === "?") {
         printHelp();
         continue;
       }
 
-      if (line.startsWith("/")) {
-        if (line === "/help") {
+      if (lineInput.startsWith("/")) {
+        if (lineInput === "/") {
+          printSlashCommandCandidates("/");
+          continue;
+        }
+        if (lineInput === "/help") {
           printHelp();
           continue;
         }
-        if (line === "/thinking") {
+        if (lineInput === "/thinking") {
           state.thinkingLevel = state.thinkingLevel === "normal" ? "deep" : "normal";
           output.write(`Thinkingレベルを ${state.thinkingLevel} に変更しました。\n\n`);
           continue;
         }
-        if (line === "/engine") {
+        if (lineInput === "/engine") {
           output.write(`現在の実行モード: ${state.executorMode}\n\n`);
           continue;
         }
-        if (line.startsWith("/engine ")) {
-          const nextModeRaw = line.replace("/engine ", "").trim().toLowerCase();
+        if (lineInput.startsWith("/engine ")) {
+          const nextModeRaw = lineInput.replace("/engine ", "").trim().toLowerCase();
           const nextMode = parseExecutorMode(nextModeRaw);
           if (!nextMode) {
             output.write("指定値が不正です。`/engine codex|claude|auto` を使ってください。\n\n");
@@ -243,7 +297,7 @@ export async function startCli(): Promise<void> {
           output.write(`実行モードを ${state.executorMode} に変更しました。\n\n`);
           continue;
         }
-        if (line === "/reset") {
+        if (lineInput === "/reset") {
           state.history = [{ role: "system", content: SYSTEM_PROMPT }];
           state.projectContextCache.clear();
           state.latestPromptPath = null;
@@ -251,7 +305,7 @@ export async function startCli(): Promise<void> {
           output.write("会話履歴を初期化しました。\n\n");
           continue;
         }
-        if (line === "/finalize") {
+        if (lineInput === "/finalize") {
           try {
             output.write("最終指示文を生成しています...\n");
             const { prompt } = await buildFinalPrompt(llm, state.history);
@@ -268,7 +322,7 @@ export async function startCli(): Promise<void> {
           }
           continue;
         }
-        if (line === "/run") {
+        if (lineInput === "/run") {
           try {
             output.write("最終指示文を生成して実行器を起動します...\n");
             const { prompt, historyText } = await buildFinalPrompt(llm, state.history);
@@ -314,19 +368,19 @@ export async function startCli(): Promise<void> {
           }
           continue;
         }
-        if (line === "/exit") {
+        if (lineInput === "/exit") {
           output.write("LLMdraft CLIを終了します。\n");
           break;
         }
 
-        output.write("不明なコマンドです。`/help` を確認してください。\n\n");
+        printSlashCommandCandidates(lineInput);
         continue;
       }
 
-      let userContent = line;
+      let userContent = lineInput;
       try {
         const projectContext = await resolveProjectContext({
-          messageContent: line,
+          messageContent: lineInput,
           llm,
           executorMode: state.executorMode,
           codexCommandTemplate: config.codexCommandTemplate,
@@ -338,7 +392,7 @@ export async function startCli(): Promise<void> {
           cache: state.projectContextCache,
         });
         if (projectContext.contextText) {
-          userContent = `${line}\n\n[補足: プロジェクト理解メモ]\n${projectContext.contextText}`;
+          userContent = `${lineInput}\n\n[補足: プロジェクト理解メモ]\n${projectContext.contextText}`;
           output.write(
             `project> ${projectContext.resolvedProjects.join(", ")} を実行器に確認して理解した上で続行します。\n`,
           );
