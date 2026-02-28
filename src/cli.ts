@@ -130,18 +130,17 @@ function separatorLine(width: number): string {
   return "-".repeat(Math.max(20, width));
 }
 
-function renderStatusLine(state: CliState, width: number): void {
+function buildStatusLine(state: CliState, width: number): string {
   const left = "? for shortcuts";
   const right = `Thinking ${state.thinkingLevel} | tab: command suggestions`;
   const spaces = Math.max(1, width - left.length - right.length);
-  output.write(`${ANSI.dim}${left}${" ".repeat(spaces)}${right}${ANSI.reset}\n`);
+  return `${left}${" ".repeat(spaces)}${right}`;
 }
 
 function renderCliFrame(
   configModel: string,
   configProvider: string,
   configWorkdir: string,
-  state: CliState,
 ): void {
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
   output.write(`${ANSI.magenta}[##]${ANSI.reset} ${ANSI.bold}LLMDraft CLI v1${ANSI.reset}\n`);
@@ -150,10 +149,33 @@ function renderCliFrame(
   );
   output.write(`${ANSI.dim}${configWorkdir}${ANSI.reset}\n`);
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  output.write(`${ANSI.dim}| ${ANSI.reset}入力してください（Enterで送信）\n`);
+  output.write(`${ANSI.dim}入力欄は下に表示されます。${ANSI.reset}\n\n`);
+}
+
+async function askInActiveBox(
+  rl: readline.Interface,
+  state: CliState,
+): Promise<{ lineInput: string; width: number }> {
+  const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
+
+  if (!process.stdout.isTTY) {
+    const lineInput = (await rl.question("| > ")).trim();
+    return { lineInput, width };
+  }
+
+  const status = buildStatusLine(state, width);
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  renderStatusLine(state, width);
-  output.write("\n");
+  output.write("| > \n");
+  output.write(`${ANSI.dim}${status}${ANSI.reset}\n`);
+  output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
+
+  // Move cursor to the input line so it stays above the shortcuts line.
+  output.write("\x1b[3A\x1b[4C");
+  const lineInput = (await rl.question("")).trim();
+
+  // Move cursor back below the box before printing responses.
+  output.write("\x1b[3B\r");
+  return { lineInput, width };
 }
 
 function slashCommandCompleter(currentLine: string): [string[], string] {
@@ -243,7 +265,7 @@ export async function startCli(): Promise<void> {
   };
 
   output.write(`${BANNER}\n`);
-  renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir, state);
+  renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir);
 
   const rl = readline.createInterface({
     input,
@@ -254,12 +276,7 @@ export async function startCli(): Promise<void> {
 
   try {
     while (true) {
-      const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
-      output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-      const lineInput = (await rl.question("| > ")).trim();
-      output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-      renderStatusLine(state, width);
-      output.write("\n");
+      const { lineInput } = await askInActiveBox(rl, state);
 
       if (!lineInput) {
         continue;
