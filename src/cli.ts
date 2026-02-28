@@ -52,16 +52,16 @@ const SLASH_COMMAND_HELP: Record<(typeof SLASH_COMMANDS)[number], string> = {
 const SYSTEM_PROMPT = [
   "あなたは、ユーザーが出したラフな要望文を整えて、CodexCLIやClaude Codeが理解しやすい実行指示文に直す通訳・編集アシスタントです。",
   "役割は『実装者』ではなく『指示文の整形者』です。仕様を勝手に決めず、ユーザー意図を忠実に整理してください。",
-  "不足情報があっても、まず実行可能な暫定指示文を作り、必要な確認点は末尾に [要確認] として短く添えてください。",
-  "ユーザーへ一方的に情報提供を要求する質問票だけを返してはいけません。",
+  "不足情報があっても止まらずに、合理的な仮定を置いて実行可能な指示文を作ってください。",
+  "ユーザーへ質問を返さないでください。質問票の形式は禁止です。",
   "日本語で、簡潔かつ分かりやすく回答してください。",
 ].join("\n");
 
 const FINALIZER_SYSTEM_PROMPT = [
   "あなたは会話ログから、CodexCLI/Claude Codeへ渡す最終指示文を1つに統合する通訳エディタです。",
   "ユーザーのラフな文を、AI実行器が誤解しにくい正しい作業指示文へ直してください。",
-  "役割は通訳であり、要求元ユーザーに質問を返すことではありません。",
-  "不足情報は [要確認] として明記し、作業の進め方を止めない形で指示文に残してください。",
+  "役割は通訳であり、要求元ユーザーに質問を返すことではありません。質問文は禁止です。",
+  "不足情報は [仮定] として明記し、作業を止めない形で指示文に残してください。",
   "指示文は『目的』『実施内容』『制約』『完了条件』が分かる構成にしてください。",
   "出力は最終指示文のみを返してください。",
   "日本語で、目的・要件・制約・完了条件が明確になるように書いてください。",
@@ -75,6 +75,8 @@ function looksLikeQuestionnaire(text: string): boolean {
     /必要な情報/u,
     /以下の情報/u,
     /届いた時点/u,
+    /\[要確認\]/u,
+    /[?？]/u,
   ];
   return patterns.some((pattern) => pattern.test(text));
 }
@@ -141,7 +143,7 @@ async function buildFinalPrompt(
           "あなたは通訳エディタです。",
           "次の文章はユーザー向け質問票になっている可能性があります。",
           "質問票ではなく、実行器がすぐ作業できる指示文へ書き換えてください。",
-          "不足情報は [要確認] を使って残し、作業手順は止めないでください。",
+          "不足情報は [仮定] を使って補完し、質問文は一切書かないでください。",
           "出力は指示文本文のみ。",
         ].join("\n"),
       },
@@ -401,7 +403,22 @@ function shouldAutoExecuteRequest(message: string): boolean {
     return false;
   }
 
+  const likelyChatOnly = [
+    /ありがとう/u,
+    /感謝/u,
+    /^ok$/iu,
+    /^了解$/u,
+    /^はい$/u,
+    /^いいえ$/u,
+    /^こんにちは$/u,
+    /^こんばんは$/u,
+  ].some((pattern) => pattern.test(text));
+  if (likelyChatOnly) {
+    return false;
+  }
+
   const likelyTask = [
+    /して/u,
     /してほしい/u,
     /してください/u,
     /やって/u,
@@ -416,16 +433,40 @@ function shouldAutoExecuteRequest(message: string): boolean {
     /対応/u,
     /リファクタ/u,
     /機能/u,
+    /調査/u,
+    /報告/u,
+    /確認/u,
+    /検証/u,
+    /調べ/u,
+    /まとめ/u,
   ].some((pattern) => pattern.test(text));
 
-  if (!likelyTask) {
-    return false;
+  return likelyTask;
+}
+
+function prepareMessageForProjectContext(
+  rawMessage: string,
+  workdir: string,
+  preferWorkspaceContext: boolean,
+): string {
+  const projectName = path.basename(workdir).trim();
+  if (!projectName) {
+    return rawMessage;
   }
 
-  const likelyChatOnly = [/ありがとう/u, /感謝/u, /^ok$/iu, /^了解$/u, /^はい$/u, /^いいえ$/u].some(
-    (pattern) => pattern.test(text),
-  );
-  return !likelyChatOnly;
+  const tagged = `[${projectName}]`;
+  if (rawMessage.includes(tagged)) {
+    return rawMessage;
+  }
+
+  const mentionsWorkspace =
+    rawMessage.toLowerCase().includes(projectName.toLowerCase()) || /creativebot/i.test(rawMessage);
+
+  if (mentionsWorkspace || preferWorkspaceContext) {
+    return `${rawMessage}\n${tagged}`;
+  }
+
+  return rawMessage;
 }
 
 async function runExecutorWithPrompt(
@@ -682,10 +723,17 @@ export async function startCli(): Promise<void> {
         continue;
       }
 
+      const autoExecuteRequest = state.autoRunEnabled && shouldAutoExecuteRequest(lineInput);
+
       let userContent = lineInput;
       try {
+        const contextSeedMessage = prepareMessageForProjectContext(
+          lineInput,
+          config.codexWorkdir,
+          autoExecuteRequest,
+        );
         const projectContext = await resolveProjectContext({
-          messageContent: lineInput,
+          messageContent: contextSeedMessage,
           llm,
           executorMode: state.executorMode,
           codexCommandTemplate: config.codexCommandTemplate,
@@ -710,7 +758,7 @@ export async function startCli(): Promise<void> {
       state.history.push({ role: "user", content: userContent });
       state.history = trimHistory(state.history, config.maxHistoryMessages);
 
-      if (state.autoRunEnabled && shouldAutoExecuteRequest(lineInput)) {
+      if (autoExecuteRequest) {
         try {
           output.write(
             `${ANSI.cyan}system> ${ANSI.reset}依頼を受け取りました。実行器を裏で起動して進めます...\n`,
