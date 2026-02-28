@@ -3,7 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import readlinePromises from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { type BaseConfig, loadCliConfig } from "./config";
+import { loadCliConfig } from "./config";
 import { explainExecutorResult } from "./explain";
 import {
   executorLabel,
@@ -13,7 +13,7 @@ import {
   type ExecutorMode,
 } from "./executor";
 import { LlmClient, type ChatMessage } from "./llm";
-import { resolveProjectContext, runExecutorForProjectProbe, summarizeProjectProbe } from "./project-context";
+import { resolveProjectContext } from "./project-context";
 import { ensureCliSetup } from "./setup";
 
 const ANSI = {
@@ -157,7 +157,7 @@ async function askInActiveBox(
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
   const sep = `${ANSI.dim}${separatorLine(width)}${ANSI.reset}`;
   const status = `${ANSI.dim}${buildStatusLine(state, width)}${ANSI.reset}`;
-  const promptPlain = "> ";
+  const promptPlain = "chat> ";
   const promptColored = `${ANSI.bold}${ANSI.cyan}${promptPlain}${ANSI.reset}`;
   const placeholder = "Type your request...";
   const isTty = Boolean(process.stdout.isTTY && (input as NodeJS.ReadStream).isTTY);
@@ -390,73 +390,8 @@ export async function startCli(): Promise<void> {
   output.write(`${BANNER}\n`);
   renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir);
 
-  let workspaceSummary = "";
-  let initialSystemPrompt = SYSTEM_PROMPT;
-  
-  try {
-    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let frameIndex = 0;
-    
-    let loadingInterval: NodeJS.Timeout | null = null;
-    let logStarted = false;
-    
-    if (process.stdout.isTTY) {
-      output.write(`\n${ANSI.cyan}system> ${ANSI.reset}${frames[0]} ワークスペースの概要を調査しています...`);
-      loadingInterval = setInterval(() => {
-        frameIndex = (frameIndex + 1) % frames.length;
-        readline.cursorTo(output, 8);
-        output.write(`${frames[frameIndex]} ワークスペースの概要を調査しています...`);
-      }, 80);
-    } else {
-      output.write("\nsystem> ワークスペースの概要を調査しています...\n");
-    }
-
-    const projectName = path.basename(config.codexWorkdir) || "workspace";
-    const probe = await runExecutorForProjectProbe({
-      llm,
-      executorMode: config.executorMode,
-      codexCommandTemplate: config.codexCommandTemplate,
-      claudeCommandTemplate: config.claudeCommandTemplate,
-      projectName,
-      workdir: config.codexWorkdir,
-      outputsDir: config.outputsDir,
-      ownerId: "cli-user",
-      sessionId: "cli-session",
-      onLog: (chunk) => {
-        if (!logStarted) {
-          logStarted = true;
-          if (loadingInterval) {
-            clearInterval(loadingInterval);
-            readline.cursorTo(output, 0);
-            readline.clearLine(output, 1);
-            output.write(`${ANSI.cyan}system> ${ANSI.reset}ワークスペース調査ログ:\n`);
-          }
-        }
-        output.write(`${ANSI.dim}${chunk}${ANSI.reset}`);
-      }
-    });
-    workspaceSummary = await summarizeProjectProbe(llm, projectName, probe.executorName, probe.logText);
-
-    if (loadingInterval && !logStarted) {
-      clearInterval(loadingInterval);
-      readline.cursorTo(output, 8);
-      readline.clearLine(output, 1);
-    }
-    
-    if (process.stdout.isTTY) {
-      output.write(`\r${ANSI.cyan}system> ${ANSI.reset}ワークスペースの概要を把握しました。\n\n`);
-    } else {
-      output.write("\nsystem> ワークスペースの概要を把握しました。\n\n");
-    }
-
-    initialSystemPrompt = `${SYSTEM_PROMPT}\n\n【ワークスペース概要】\n${workspaceSummary}`;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "不明なエラーです。";
-    output.write(`\nsystem> ワークスペースの概要調査に失敗しました: ${message}\n\n`);
-  }
-
   const state: CliState = {
-    history: [{ role: "system", content: initialSystemPrompt }],
+    history: [{ role: "system", content: SYSTEM_PROMPT }],
     executorMode: config.executorMode,
     projectContextCache: new Map<string, string>(),
     thinkingLevel: "normal",
@@ -636,7 +571,7 @@ export async function startCli(): Promise<void> {
       try {
         const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let frameIndex = 0;
-        
+
         if (isTty) {
           output.write(`${ANSI.cyan}● ${ANSI.reset}${frames[0]} 生成中...`);
           loadingInterval = setInterval(() => {
@@ -647,16 +582,16 @@ export async function startCli(): Promise<void> {
         }
 
         const response = await llm.chat(state.history);
-        
+
         if (loadingInterval) {
           clearInterval(loadingInterval);
           readline.cursorTo(output, 2);
           readline.clearLine(output, 1);
         }
-        
+
         state.history.push({ role: "assistant", content: response });
         state.history = trimHistory(state.history, config.maxHistoryMessages);
-        
+
         if (isTty) {
           output.write(`${ANSI.cyan}● ${ANSI.reset}${response}\n\n`);
         } else {
