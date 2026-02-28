@@ -9,7 +9,7 @@ import {
   EmbedBuilder,
   GatewayIntentBits,
   PermissionsBitField,
-  type Message,
+  SlashCommandBuilder,
   type TextChannel,
 } from "discord.js";
 import { loadConfig } from "./config";
@@ -20,6 +20,14 @@ const CREATE_SESSION_BUTTON_ID = "draftcraft:create-session";
 const FINALIZE_BUTTON_ID = "draftcraft:finalize";
 const CLOSE_BUTTON_ID = "draftcraft:close";
 const SESSION_TOPIC_PREFIX = "draftcraft-owner:";
+const LEGACY_PREFIX_COMMANDS = new Set(["!reset", "!finalize", "!close"]);
+const APP_COMMAND_DEFINITIONS = [
+  new SlashCommandBuilder()
+    .setName("reset")
+    .setDescription("このチャンネルの会話履歴を初期化します"),
+  new SlashCommandBuilder().setName("finalize").setDescription("最終確定してCodexCLIを実行します"),
+  new SlashCommandBuilder().setName("close").setDescription("このセッションチャンネルを閉じます"),
+].map((command) => command.toJSON());
 
 type DraftSession = {
   ownerId: string;
@@ -163,6 +171,19 @@ async function ensurePanelMessage(): Promise<void> {
   });
 }
 
+async function registerAppCommands(): Promise<void> {
+  const panelChannelRaw = await client.channels.fetch(config.panelChannelId);
+  if (!panelChannelRaw || panelChannelRaw.type !== ChannelType.GuildText) {
+    throw new Error("PANEL_CHANNEL_ID は通常のテキストチャンネルを指定してください。");
+  }
+  if (!client.application) {
+    throw new Error("Discordアプリケーション情報を取得できませんでした。");
+  }
+
+  const panelChannel = panelChannelRaw as TextChannel;
+  await client.application.commands.set(APP_COMMAND_DEFINITIONS, panelChannel.guildId);
+}
+
 async function createSessionChannel(guildId: string, ownerId: string): Promise<TextChannel> {
   const guild = await client.guilds.fetch(guildId);
   const category = await guild.channels.fetch(config.sessionCategoryId);
@@ -215,7 +236,7 @@ async function createSessionChannel(guildId: string, ownerId: string): Promise<T
       [
         "このチャンネルで要件を書いてください。Ollamaが整理を手伝います。",
         "最終的に `最終確定してCodexCLI実行` ボタンでCodexCLIを起動します。",
-        "コマンド: `!reset` で会話履歴を初期化。",
+        "スラッシュコマンド: `/reset` `/finalize` `/close` を利用できます。",
       ].join("\n"),
     )
     .setColor(0x1f883d);
@@ -373,54 +394,78 @@ async function finalizeAndRun(
   }
 }
 
-async function handleSessionCommand(message: Message): Promise<boolean> {
-  if (message.channel.type !== ChannelType.GuildText) return false;
-  const channel = message.channel as TextChannel;
-  const session = ensureSession(channel);
-  if (!session || message.author.id !== session.ownerId) {
-    return false;
-  }
-
-  const trimmed = message.content.trim();
-  if (trimmed === "!reset") {
-    session.history = [{ role: "system", content: SYSTEM_PROMPT }];
-    await channel.send("会話履歴を初期化しました。");
-    return true;
-  }
-  if (trimmed === "!finalize") {
-    await channel.send("最終指示文を生成して、CodexCLI実行を開始します...");
-    try {
-      const result = await finalizeAndRun(channel, message.author.id);
-      await channel.send(
-        [
-          "最終確定を実行しました。",
-          `run id: \`${result.runId}\``,
-          `prompt: \`${result.promptFilePath}\``,
-          `log: \`${result.logFilePath}\``,
-        ].join("\n"),
-      );
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "不明なエラーです。";
-      await channel.send(`最終確定に失敗しました。\n${errorMessage}`);
-    }
-    return true;
-  }
-  if (trimmed === "!close") {
-    await channel.send("チャンネルを閉じます。");
-    sessions.delete(channel.id);
-    await channel.delete("DraftCraft session closed by owner");
-    return true;
-  }
-  return false;
-}
-
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user?.tag}`);
   await ensurePanelMessage();
+  await registerAppCommands();
   console.log("Panel message is ready.");
 });
 
 client.on("interactionCreate", async (interaction) => {
+  if (interaction.isChatInputCommand()) {
+    if (!interaction.channel || interaction.channel.type !== ChannelType.GuildText) {
+      await interaction.reply({
+        content: "このコマンドはテキストチャンネル内でのみ実行できます。",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const channel = interaction.channel as TextChannel;
+    const session = ensureSession(channel);
+    if (!session) {
+      await interaction.reply({
+        content: "このチャンネルはDraftCraftセッションではありません。",
+        ephemeral: true,
+      });
+      return;
+    }
+    if (interaction.user.id !== session.ownerId) {
+      await interaction.reply({
+        content: "この操作はチャンネル作成者のみ実行できます。",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    if (interaction.commandName === "reset") {
+      session.history = [{ role: "system", content: SYSTEM_PROMPT }];
+      await interaction.reply({ content: "会話履歴を初期化しました。", ephemeral: true });
+      return;
+    }
+
+    if (interaction.commandName === "finalize") {
+      await interaction.deferReply({ ephemeral: true });
+      try {
+        const result = await finalizeAndRun(channel, interaction.user.id);
+        await interaction.editReply(
+          [
+            "最終確定を実行しました。",
+            `run id: \`${result.runId}\``,
+            `prompt: \`${result.promptFilePath}\``,
+            `log: \`${result.logFilePath}\``,
+          ].join("\n"),
+        );
+        await channel.send(
+          `<@${interaction.user.id}> CodexCLI実行を開始しました。run id: \`${result.runId}\``,
+        );
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "不明なエラーです。";
+        await interaction.editReply(`最終確定に失敗しました。\n${errorMessage}`);
+      }
+      return;
+    }
+
+    if (interaction.commandName === "close") {
+      await interaction.reply({ content: "チャンネルを閉じます。", ephemeral: true });
+      sessions.delete(channel.id);
+      await channel.delete("DraftCraft session closed by owner");
+      return;
+    }
+
+    return;
+  }
+
   if (!interaction.isButton()) return;
 
   if (interaction.customId === CREATE_SESSION_BUTTON_ID) {
@@ -501,12 +546,17 @@ client.on("messageCreate", async (message) => {
   const session = ensureSession(channel);
   if (!session) return;
   if (message.author.id !== session.ownerId) return;
+  const trimmed = message.content.trim();
+  if (!trimmed) return;
 
-  const handledCommand = await handleSessionCommand(message);
-  if (handledCommand) return;
+  if (LEGACY_PREFIX_COMMANDS.has(trimmed)) {
+    await channel.send(
+      "`!`コマンドは廃止しました。`/reset` `/finalize` `/close` を使ってください。",
+    );
+    return;
+  }
 
-  if (!message.content.trim()) return;
-  await callOllamaForChat(channel, message.content.trim());
+  await callOllamaForChat(channel, trimmed);
 });
 
 client.on("channelDelete", (channel) => {

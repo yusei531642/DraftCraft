@@ -81,8 +81,8 @@ npm run start
 
 ## セッション操作
 
-作業チャンネル内で使えるコマンド:
+作業チャンネル内で使えるアプリコマンド:
 
-- `!reset` 会話履歴を初期化
-- `!finalize` 最終確定してCodexCLI実行
-- `!close` チャンネルを削除
+- `/reset` 会話履歴を初期化
+- `/finalize` 最終確定してCodexCLI実行
+- `/close` チャンネルを削除
