@@ -150,7 +150,7 @@ function renderCliFrame(
   );
   output.write(`${ANSI.dim}${configWorkdir}${ANSI.reset}\n`);
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  output.write("Hi! How can I help you today?\n\n");
+  output.write(`${ANSI.dim}| ${ANSI.reset}入力してください（Enterで送信）\n`);
   output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
   renderStatusLine(state, width);
   output.write("\n");
@@ -256,14 +256,16 @@ export async function startCli(): Promise<void> {
     while (true) {
       const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
       output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-      const lineInput = (await rl.question("> ")).trim();
+      const lineInput = (await rl.question("| > ")).trim();
       output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
+      renderStatusLine(state, width);
+      output.write("\n");
 
       if (!lineInput) {
         continue;
       }
 
-      if (lineInput === "?") {
+      if (lineInput === "?" || lineInput === "/?") {
         printHelp();
         continue;
       }
