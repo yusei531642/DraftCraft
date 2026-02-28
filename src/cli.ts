@@ -144,7 +144,7 @@ function renderCliFrame(
   state: CliState,
 ): void {
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
-  output.write(`${ANSI.magenta}[##]${ANSI.reset} ${ANSI.bold}LLMdraft CLI v1${ANSI.reset}\n`);
+  output.write(`${ANSI.magenta}[##]${ANSI.reset} ${ANSI.bold}LLMDraft CLI v1${ANSI.reset}\n`);
   output.write(
     `${ANSI.dim}${configProvider.toUpperCase()} agent ${ANSI.reset}${ANSI.cyan}${configModel}${ANSI.reset}\n`,
   );
@@ -369,7 +369,7 @@ export async function startCli(): Promise<void> {
           continue;
         }
         if (lineInput === "/exit") {
-          output.write("LLMdraft CLIを終了します。\n");
+          output.write("LLMDraft CLIを終了します。\n");
           break;
         }
 

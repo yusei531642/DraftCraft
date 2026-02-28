@@ -124,7 +124,7 @@ function buildEnvText(existing: Map<string, string>, next: SetupResult): string 
   ]);
 
   const lines: string[] = [];
-  lines.push("# LLMdraft settings");
+  lines.push("# LLMDraft settings");
   lines.push(`LLM_PROVIDER=${toEnvValue(next.provider)}`);
   lines.push(`LLM_MODEL=${toEnvValue(next.model)}`);
   lines.push(`OLLAMA_BASE_URL=${toEnvValue(next.ollamaBaseUrl)}`);
@@ -175,7 +175,7 @@ async function runSetup(): Promise<void> {
   const rl = readline.createInterface({ input, output, terminal: true });
 
   try {
-    output.write("\n=== LLMdraft Setup ===\n");
+    output.write("\n=== LLMDraft Setup ===\n");
     output.write("初回セットアップを開始します。\n");
 
     const currentProvider = (existing.get("LLM_PROVIDER") as LlmProvider | undefined) ?? "ollama";

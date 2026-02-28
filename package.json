@@ -1,7 +1,7 @@
 {
   "name": "draftcraft",
   "version": "1.0.0",
-  "description": "LLMdraft CLI (メイン) と Discord 連携 (サブ) で指示文作成を支援するツール",
+  "description": "LLMDraft CLI (メイン) と Discord 連携 (サブ) で指示文作成を支援するツール",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",

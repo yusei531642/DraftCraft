@@ -1,11 +1,11 @@
 # DraftCraft
 
-`LLMdraft CLI` をメインに、LLMとの対話で指示文を作り、最終的にCodexCLIまたはClaude Codeを実行するツールです。  
+`LLMDraft CLI` をメインに、LLMとの対話で指示文を作り、最終的にCodexCLIまたはClaude Codeを実行するツールです。  
 Discord連携はサブ機能として利用できます。
 
 ## メイン機能（CLI）
 
-- 起動時に `LLMdraft` のAAアートを表示
+- 起動時に `LLMDraft` のAAアートを表示
 - Gemini CLI / Claude Code 風の対話フローでチャット
 - 初回起動時は自動で `Setup` ウィザードを開始
 - LLMプロバイダを選択可能:
