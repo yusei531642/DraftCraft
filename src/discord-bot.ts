@@ -20,7 +20,7 @@ import {
   type ExecutorKey,
   type ExecutorMode,
 } from "./executor";
-import { OllamaClient, type ChatMessage } from "./ollama";
+import { LlmClient, type ChatMessage } from "./llm";
 
 const CREATE_SESSION_BUTTON_ID = "draftcraft:create-session";
 const FINALIZE_BUTTON_ID = "draftcraft:finalize";
@@ -69,7 +69,7 @@ const FINALIZER_SYSTEM_PROMPT = [
 ].join("\n");
 
 let config: DiscordConfig;
-let ollama: OllamaClient;
+let llm: LlmClient;
 let hasStarted = false;
 
 const sessions = new Map<string, DraftSession>();
@@ -173,7 +173,7 @@ async function ensurePanelMessage(): Promise<void> {
     .setDescription(
       [
         "ボタンを押すと、あなただけの作業チャンネルを作成します。",
-        "そのチャンネルでOllamaと会話しながら、Codex/Claude向けの指示文を作成できます。",
+        "そのチャンネルでLLMと会話しながら、Codex/Claude向けの指示文を作成できます。",
       ].join("\n"),
     )
     .setColor(0x2f81f7);
@@ -255,7 +255,8 @@ async function createSessionChannel(guildId: string, ownerId: string): Promise<T
     .setTitle("指示文作成セッション")
     .setDescription(
       [
-        "このチャンネルで要件を書いてください。Ollamaが整理を手伝います。",
+        "このチャンネルで要件を書いてください。LLMが整理を手伝います。",
+        `LLM: \`${config.llm.provider}\` / model: \`${config.llm.model}\``,
         "最終的に `最終確定して実行` ボタンでCodex/Claudeを起動します。",
         "スラッシュコマンド: `/engine` `/reset` `/finalize` `/close` を利用できます。",
         `現在の実行モード: \`${session.executorMode}\``,
@@ -283,7 +284,7 @@ async function createSessionChannel(guildId: string, ownerId: string): Promise<T
   return channel;
 }
 
-async function callOllamaForChat(channel: TextChannel, userContent: string): Promise<void> {
+async function callLlmForChat(channel: TextChannel, userContent: string): Promise<void> {
   const session = ensureSession(channel);
   if (!session) return;
 
@@ -297,13 +298,13 @@ async function callOllamaForChat(channel: TextChannel, userContent: string): Pro
     session.history.push({ role: "user", content: userContent });
     session.history = trimHistory(session.history, config.maxHistoryMessages);
     await channel.sendTyping();
-    const response = await ollama.chat(session.history);
+    const response = await llm.chat(session.history);
     session.history.push({ role: "assistant", content: response });
     session.history = trimHistory(session.history, config.maxHistoryMessages);
     await sendLongMessage(channel, response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "不明なエラーです。";
-    await channel.send(`Ollama連携でエラーが発生しました。\n${message}`);
+    await channel.send(`LLM連携でエラーが発生しました。\n${message}`);
   } finally {
     processingChannels.delete(channel.id);
   }
@@ -335,7 +336,7 @@ async function finalizeAndRun(
       throw new Error("会話履歴が空のため最終確定できません。");
     }
 
-    const prompt = await ollama.chat([
+    const prompt = await llm.chat([
       { role: "system", content: FINALIZER_SYSTEM_PROMPT },
       { role: "user", content: historyText },
     ]);
@@ -346,7 +347,7 @@ async function finalizeAndRun(
     fs.writeFileSync(promptFilePath, `${prompt}\n`, "utf8");
     const selected = await selectExecutor({
       mode: session.executorMode,
-      ollama,
+      llm,
       historyText,
       codexCommandTemplate: config.codexCommandTemplate,
       claudeCommandTemplate: config.claudeCommandTemplate,
@@ -614,7 +615,7 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  await callOllamaForChat(channel, trimmed);
+  await callLlmForChat(channel, trimmed);
 });
 
 client.on("channelDelete", (channel) => {
@@ -629,10 +630,7 @@ export async function startDiscordBot(): Promise<void> {
   hasStarted = true;
 
   config = loadDiscordConfig();
-  ollama = new OllamaClient({
-    baseUrl: config.ollamaBaseUrl,
-    model: config.ollamaModel,
-  });
+  llm = new LlmClient(config.llm);
 
   try {
     await client.login(config.discordBotToken);

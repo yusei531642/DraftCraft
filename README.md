@@ -1,29 +1,35 @@
 # DraftCraft
 
-`LLMdraft CLI` をメインに、Ollamaとの対話で指示文を作り、最終的にCodexCLIまたはClaude Codeを実行するツールです。  
+`LLMdraft CLI` をメインに、LLMとの対話で指示文を作り、最終的にCodexCLIまたはClaude Codeを実行するツールです。  
 Discord連携はサブ機能として利用できます。
 
 ## メイン機能（CLI）
 
 - 起動時に `LLMdraft` のAAアートを表示
-- Gemini CLI / Claude Code 風の対話フローでOllamaとチャット
+- Gemini CLI / Claude Code 風の対話フローでチャット
+- 初回起動時は自動で `Setup` ウィザードを開始
+- LLMプロバイダを選択可能:
+  - Ollama
+  - LM Studio（OpenAI互換API）
+  - OpenAI API
+  - Anthropic API
 - 会話履歴から最終指示文を統合し `outputs/prompts` に保存
 - `node-pty` 経由でCodexCLI/Claude CodeをPTY実行
-- `EXECUTOR_MODE=auto` では、Ollamaが会話履歴を見て実行器を自動選択
+- `EXECUTOR_MODE=auto` では、選択中LLMが会話履歴を見て実行器を自動選択
 - 実行ログを `outputs/logs` に保存
 
 ## サブ機能（Discord）
 
 - 設定済みチャンネルに、Embed + ボタンの開始パネルを自動投稿
 - ボタン押下で、ユーザー専用の作業チャンネルをカテゴリ配下に作成
-- 作業チャンネル内でOllamaと対話
+- 作業チャンネル内で設定済みLLMと対話
 - `/engine` `/reset` `/finalize` `/close` のアプリコマンドに対応
 - `/finalize` またはボタンで選択済み実行器を起動し、ANSI除去済みログをDiscordへ逐次投稿
 
 ## 必要環境
 
 - Node.js 20+
-- Ollama（ローカルまたは接続可能なサーバー）
+- 利用するLLMプロバイダ（Ollama / LM Studio / OpenAI API / Anthropic API）
 - CodexCLI もしくは Claude Code（テンプレートコマンドで実行可能な状態）
 - Discord連携を使う場合のみ Discord Bot Token
 
@@ -34,12 +40,21 @@ npm install
 copy .env.example .env
 ```
 
-`.env` を編集してください。
+`.env` を編集してください（CLI初回起動時のSetupでも生成できます）。
 
 ```env
+# LLM provider: ollama | lmstudio | openai | anthropic
+LLM_PROVIDER=ollama
+LLM_MODEL=llama3.1:8b
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=llama3.1:8b
-EXECUTOR_MODE=codex
+LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_API_KEY=
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_API_KEY=
+
+# Executor mode: codex | claude | auto
+EXECUTOR_MODE=auto
 CODEX_COMMAND_TEMPLATE=codex
 CLAUDE_COMMAND_TEMPLATE=claude
 CODEX_WORKDIR=D:/program/creativebot
@@ -56,6 +71,15 @@ SESSION_CATEGORY_ID=123456789012345678
 - `EXECUTOR_MODE`: `codex` / `claude` / `auto`
 - `CODEX_COMMAND_TEMPLATE`: CodexCLI用コマンド
 - `CLAUDE_COMMAND_TEMPLATE`: Claude Code用コマンド
+
+## LLMプロバイダ設定
+
+- `LLM_PROVIDER`: `ollama` / `lmstudio` / `openai` / `anthropic`
+- `LLM_MODEL`: 利用モデル名
+- `OLLAMA_BASE_URL`: Ollama API URL
+- `LMSTUDIO_BASE_URL`: LM Studio API URL（OpenAI互換）
+- `OPENAI_BASE_URL` / `OPENAI_API_KEY`: OpenAI設定
+- `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`: Anthropic設定
 
 各テンプレートは最終確定時にそのまま実行され、以下のプレースホルダを使用できます。
 

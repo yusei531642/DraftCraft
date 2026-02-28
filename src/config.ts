@@ -3,10 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { type ExecutorMode } from "./executor";
+import { type LlmConfig, type LlmProvider } from "./llm";
 
 const baseSchema = z.object({
+  LLM_PROVIDER: z.enum(["ollama", "lmstudio", "openai", "anthropic"]).default("ollama"),
+  LLM_MODEL: z.string().trim().min(1).optional(),
   OLLAMA_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
-  OLLAMA_MODEL: z.string().min(1),
+  OLLAMA_MODEL: z.string().trim().min(1).optional(),
+  LMSTUDIO_BASE_URL: z.string().url().default("http://127.0.0.1:1234/v1"),
+  OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
+  OPENAI_API_KEY: z.string().trim().min(1).optional(),
+  ANTHROPIC_BASE_URL: z.string().url().default("https://api.anthropic.com"),
+  ANTHROPIC_API_KEY: z.string().trim().min(1).optional(),
   EXECUTOR_MODE: z.enum(["codex", "claude", "auto"]).default("codex"),
   CODEX_COMMAND_TEMPLATE: z.string().trim().min(1).optional(),
   CLAUDE_COMMAND_TEMPLATE: z.string().trim().min(1).optional(),
@@ -21,8 +29,7 @@ const discordSchema = z.object({
 });
 
 export type BaseConfig = {
-  ollamaBaseUrl: string;
-  ollamaModel: string;
+  llm: LlmConfig;
   executorMode: ExecutorMode;
   codexCommandTemplate: string | null;
   claudeCommandTemplate: string | null;
@@ -36,6 +43,19 @@ export type DiscordConfig = BaseConfig & {
   panelChannelId: string;
   sessionCategoryId: string;
 };
+
+function validateProviderRequirements(
+  provider: LlmProvider,
+  openaiApiKey: string | null,
+  anthropicApiKey: string | null,
+): void {
+  if (provider === "openai" && !openaiApiKey) {
+    throw new Error("LLM_PROVIDER=openai には OPENAI_API_KEY が必要です。");
+  }
+  if (provider === "anthropic" && !anthropicApiKey) {
+    throw new Error("LLM_PROVIDER=anthropic には ANTHROPIC_API_KEY が必要です。");
+  }
+}
 
 function resolveBaseConfig(): BaseConfig {
   const parsed = baseSchema.safeParse(process.env);
@@ -56,6 +76,15 @@ function resolveBaseConfig(): BaseConfig {
   const outputsDir = path.resolve(process.cwd(), "outputs");
   fs.mkdirSync(outputsDir, { recursive: true });
 
+  const model = parsed.data.LLM_MODEL ?? parsed.data.OLLAMA_MODEL ?? "";
+  if (!model) {
+    throw new Error("LLM_MODEL が必要です。（後方互換として OLLAMA_MODEL も可）");
+  }
+
+  const openaiApiKey = parsed.data.OPENAI_API_KEY ?? null;
+  const anthropicApiKey = parsed.data.ANTHROPIC_API_KEY ?? null;
+  validateProviderRequirements(parsed.data.LLM_PROVIDER, openaiApiKey, anthropicApiKey);
+
   const codexCommandTemplate = parsed.data.CODEX_COMMAND_TEMPLATE ?? null;
   const claudeCommandTemplate = parsed.data.CLAUDE_COMMAND_TEMPLATE ?? null;
   if (!codexCommandTemplate && !claudeCommandTemplate) {
@@ -69,8 +98,16 @@ function resolveBaseConfig(): BaseConfig {
   }
 
   return {
-    ollamaBaseUrl: parsed.data.OLLAMA_BASE_URL,
-    ollamaModel: parsed.data.OLLAMA_MODEL,
+    llm: {
+      provider: parsed.data.LLM_PROVIDER,
+      model,
+      ollamaBaseUrl: parsed.data.OLLAMA_BASE_URL,
+      lmstudioBaseUrl: parsed.data.LMSTUDIO_BASE_URL,
+      openaiBaseUrl: parsed.data.OPENAI_BASE_URL,
+      openaiApiKey,
+      anthropicBaseUrl: parsed.data.ANTHROPIC_BASE_URL,
+      anthropicApiKey,
+    },
     executorMode: parsed.data.EXECUTOR_MODE,
     codexCommandTemplate,
     claudeCommandTemplate,

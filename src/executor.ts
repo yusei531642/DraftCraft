@@ -1,12 +1,12 @@
 import { runCodex } from "./codex-runner";
-import { type OllamaClient } from "./ollama";
+import { type LlmClient } from "./llm";
 
 export type ExecutorKey = "codex" | "claude";
 export type ExecutorMode = ExecutorKey | "auto";
 
 type SelectExecutorOptions = {
   mode: ExecutorMode;
-  ollama: OllamaClient;
+  llm: LlmClient;
   historyText: string;
   codexCommandTemplate: string | null;
   claudeCommandTemplate: string | null;
@@ -98,7 +98,7 @@ export async function selectExecutor(options: SelectExecutorOptions): Promise<{
   }
 
   try {
-    const response = await options.ollama.chat([
+    const response = await options.llm.chat([
       {
         role: "system",
         content: [
@@ -120,9 +120,9 @@ export async function selectExecutor(options: SelectExecutorOptions): Promise<{
 
     const normalized = response.toLowerCase().trim();
     if (normalized.includes("claude")) {
-      return { executor: "claude", reason: "auto選択: Ollamaがclaudeを推奨" };
+      return { executor: "claude", reason: "auto選択: LLMがclaudeを推奨" };
     }
-    return { executor: "codex", reason: "auto選択: Ollamaがcodexを推奨" };
+    return { executor: "codex", reason: "auto選択: LLMがcodexを推奨" };
   } catch {
     return { executor: "codex", reason: "auto選択に失敗したためcodexへフォールバック" };
   }

@@ -10,7 +10,8 @@ import {
   type ExecutorKey,
   type ExecutorMode,
 } from "./executor";
-import { OllamaClient, type ChatMessage } from "./ollama";
+import { LlmClient, type ChatMessage } from "./llm";
+import { ensureCliSetup } from "./setup";
 
 const SYSTEM_PROMPT = [
   "あなたはユーザーと一緒に、CodexCLIやClaude Codeに渡す実装指示文を作るアシスタントです。",
@@ -62,7 +63,7 @@ function formatHistoryForFinalizer(history: ChatMessage[]): string {
 }
 
 async function buildFinalPrompt(
-  ollama: OllamaClient,
+  llm: LlmClient,
   history: ChatMessage[],
 ): Promise<{ prompt: string; historyText: string }> {
   const historyText = formatHistoryForFinalizer(history);
@@ -70,7 +71,7 @@ async function buildFinalPrompt(
     throw new Error("会話履歴が空のため、最終指示文を生成できません。");
   }
 
-  const prompt = await ollama.chat([
+  const prompt = await llm.chat([
     { role: "system", content: FINALIZER_SYSTEM_PROMPT },
     { role: "user", content: historyText },
   ]);
@@ -143,11 +144,9 @@ async function runExecutorWithPrompt(
 }
 
 export async function startCli(): Promise<void> {
+  await ensureCliSetup();
   const config = loadCliConfig();
-  const ollama = new OllamaClient({
-    baseUrl: config.ollamaBaseUrl,
-    model: config.ollamaModel,
-  });
+  const llm = new LlmClient(config.llm);
 
   const state: CliState = {
     history: [{ role: "system", content: SYSTEM_PROMPT }],
@@ -158,9 +157,10 @@ export async function startCli(): Promise<void> {
 
   output.write(`${BANNER}\n`);
   output.write("LLMdraft CLI\n");
-  output.write(`model: ${config.ollamaModel}\n`);
+  output.write(`provider: ${config.llm.provider}\n`);
+  output.write(`model: ${config.llm.model}\n`);
   output.write(`executor mode: ${state.executorMode}\n`);
-  output.write("入力した内容はOllamaと対話しながら指示文に育てられます。\n");
+  output.write("入力した内容は選択したLLMと対話しながら指示文に育てられます。\n");
   printHelp();
 
   const rl = readline.createInterface({ input, output, terminal: true });
@@ -202,7 +202,7 @@ export async function startCli(): Promise<void> {
         if (line === "/finalize") {
           try {
             output.write("最終指示文を生成しています...\n");
-            const { prompt } = await buildFinalPrompt(ollama, state.history);
+            const { prompt } = await buildFinalPrompt(llm, state.history);
             const promptFilePath = await savePrompt(config.outputsDir, prompt);
             state.latestPromptPath = promptFilePath;
             state.latestPromptText = prompt;
@@ -219,13 +219,13 @@ export async function startCli(): Promise<void> {
         if (line === "/run") {
           try {
             output.write("最終指示文を生成して実行器を起動します...\n");
-            const { prompt, historyText } = await buildFinalPrompt(ollama, state.history);
+            const { prompt, historyText } = await buildFinalPrompt(llm, state.history);
             const promptFilePath = await savePrompt(config.outputsDir, prompt);
             state.latestPromptPath = promptFilePath;
             state.latestPromptText = prompt;
             const selected = await selectExecutor({
               mode: state.executorMode,
-              ollama,
+              llm,
               historyText,
               codexCommandTemplate: config.codexCommandTemplate,
               claudeCommandTemplate: config.claudeCommandTemplate,
@@ -264,13 +264,13 @@ export async function startCli(): Promise<void> {
       state.history = trimHistory(state.history, config.maxHistoryMessages);
 
       try {
-        const response = await ollama.chat(state.history);
+        const response = await llm.chat(state.history);
         state.history.push({ role: "assistant", content: response });
         state.history = trimHistory(state.history, config.maxHistoryMessages);
         output.write(`assistant> ${response}\n\n`);
       } catch (error) {
         const message = error instanceof Error ? error.message : "不明なエラーです。";
-        output.write(`Ollama連携でエラーが発生しました: ${message}\n\n`);
+        output.write(`LLM連携でエラーが発生しました: ${message}\n\n`);
       }
     }
   } finally {
