@@ -1,6 +1,6 @@
 {
   "name": "draftcraft",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "LLMDraft CLI (メイン) と Discord 連携 (サブ) で指示文作成を支援するツール",
   "main": "dist/index.js",
   "bin": {
