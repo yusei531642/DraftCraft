@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline";
 import readlinePromises from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { loadCliConfig } from "./config";
@@ -19,6 +20,7 @@ const ANSI = {
   reset: "\x1b[0m",
   bold: "\x1b[1m",
   dim: "\x1b[2m",
+  gray: "\x1b[90m",
   magenta: "\x1b[38;5;205m",
   cyan: "\x1b[36m",
 };
@@ -141,14 +143,11 @@ function buildStatusLine(state: CliState, width: number): string {
 }
 
 function renderCliFrame(configModel: string, configProvider: string, configWorkdir: string): void {
-  const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
   output.write(`${ANSI.magenta}[##]${ANSI.reset} ${ANSI.bold}LLMDraft ChatCLI${ANSI.reset}\n`);
   output.write(
     `${ANSI.dim}session ${ANSI.reset}${ANSI.cyan}${configProvider.toUpperCase()} / ${configModel}${ANSI.reset}\n`,
   );
   output.write(`${ANSI.dim}workspace ${ANSI.reset}${configWorkdir}\n`);
-  output.write(`${ANSI.dim}${separatorLine(width)}${ANSI.reset}\n`);
-  output.write("Type your request. Use /run to generate+execute final prompt.\n");
 }
 
 async function askInActiveBox(
@@ -158,12 +157,142 @@ async function askInActiveBox(
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
   const sep = `${ANSI.dim}${separatorLine(width)}${ANSI.reset}`;
   const status = `${ANSI.dim}${buildStatusLine(state, width)}${ANSI.reset}`;
+  const promptPlain = "chat> ";
+  const promptColored = `${ANSI.bold}${ANSI.cyan}${promptPlain}${ANSI.reset}`;
+  const placeholder = "Type your request...";
+  const isTty = Boolean(process.stdout.isTTY && (input as NodeJS.ReadStream).isTTY);
+
+  if (!isTty || typeof (input as NodeJS.ReadStream).setRawMode !== "function") {
+    output.write(`${sep}\n`);
+    const lineInput = (await rl.question(`${promptPlain}`)).trim();
+    output.write(`${sep}\n`);
+    output.write(`${status}\n\n`);
+    return { lineInput, width };
+  }
+
+  rl.pause();
+  output.write(`${sep}\n`);
+  output.write(`${promptColored}${ANSI.gray}${placeholder}${ANSI.reset}\n`);
   output.write(`${sep}\n`);
   output.write(`${status}\n`);
-  const lineInput = (await rl.question(`${ANSI.bold}${ANSI.cyan}chat>${ANSI.reset} `)).trim();
-  output.write("\n");
+  readline.moveCursor(output, 0, -3);
+  readline.cursorTo(output, promptPlain.length);
 
-  return { lineInput, width };
+  const readStream = input as NodeJS.ReadStream;
+  const lineInput = await new Promise<string>((resolve) => {
+    let current = "";
+    let cursor = 0;
+    const wasRaw = Boolean((readStream as NodeJS.ReadStream & { isRaw?: boolean }).isRaw);
+
+    const render = (): void => {
+      readline.cursorTo(output, promptPlain.length);
+      readline.clearLine(output, 1);
+      if (current.length === 0) {
+        output.write(`${ANSI.gray}${placeholder}${ANSI.reset}`);
+        readline.cursorTo(output, promptPlain.length);
+        return;
+      }
+      output.write(current);
+      readline.cursorTo(output, promptPlain.length + cursor);
+    };
+
+    const cleanup = (): void => {
+      readStream.off("keypress", onKeypress);
+      if (!wasRaw && typeof readStream.setRawMode === "function") {
+        readStream.setRawMode(false);
+      }
+    };
+
+    const onKeypress = (str: string, key: readline.Key): void => {
+      if (key.ctrl && key.name === "c") {
+        cleanup();
+        resolve("/exit");
+        return;
+      }
+
+      if (key.name === "return" || key.name === "enter") {
+        cleanup();
+        resolve(current);
+        return;
+      }
+
+      if (key.name === "left") {
+        cursor = Math.max(0, cursor - 1);
+        render();
+        return;
+      }
+
+      if (key.name === "right") {
+        cursor = Math.min(current.length, cursor + 1);
+        render();
+        return;
+      }
+
+      if (key.name === "home") {
+        cursor = 0;
+        render();
+        return;
+      }
+
+      if (key.name === "end") {
+        cursor = current.length;
+        render();
+        return;
+      }
+
+      if (key.name === "backspace") {
+        if (cursor > 0) {
+          current = `${current.slice(0, cursor - 1)}${current.slice(cursor)}`;
+          cursor -= 1;
+          render();
+        }
+        return;
+      }
+
+      if (key.name === "delete") {
+        if (cursor < current.length) {
+          current = `${current.slice(0, cursor)}${current.slice(cursor + 1)}`;
+          render();
+        }
+        return;
+      }
+
+      if (key.name === "tab") {
+        if (current.startsWith("/")) {
+          const hits = SLASH_COMMANDS.filter((command) => command.startsWith(current));
+          if (hits.length === 1) {
+            const match = hits[0];
+            if (match) {
+              current = match;
+              cursor = current.length;
+              render();
+            }
+          }
+        }
+        return;
+      }
+
+      if (!str || key.ctrl || key.meta || key.name === "escape") {
+        return;
+      }
+
+      current = `${current.slice(0, cursor)}${str}${current.slice(cursor)}`;
+      cursor += str.length;
+      render();
+    };
+
+    readline.emitKeypressEvents(readStream);
+    if (!wasRaw && typeof readStream.setRawMode === "function") {
+      readStream.setRawMode(true);
+    }
+    readStream.on("keypress", onKeypress);
+  });
+
+  readline.moveCursor(output, 0, 3);
+  readline.cursorTo(output, 0);
+  output.write("\n");
+  rl.resume();
+  return { lineInput: lineInput.trim(), width };
 }
 
 function slashCommandCompleter(currentLine: string): [string[], string] {
