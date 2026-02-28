@@ -151,7 +151,7 @@ function renderCliFrame(configModel: string, configProvider: string, configWorkd
 }
 
 async function askInActiveBox(
-  rl: readlinePromises.Interface,
+  rl: readlinePromises.Interface | null,
   state: CliState,
 ): Promise<{ lineInput: string; width: number }> {
   const width = Math.max(72, (process.stdout.columns ?? 100) - 2);
@@ -163,14 +163,18 @@ async function askInActiveBox(
   const isTty = Boolean(process.stdout.isTTY && (input as NodeJS.ReadStream).isTTY);
 
   if (!isTty || typeof (input as NodeJS.ReadStream).setRawMode !== "function") {
+    if (!rl) {
+      throw new Error("非TTY入力モードの初期化に失敗しました。");
+    }
     output.write(`${sep}\n`);
+    output.write(`${promptPlain}${ANSI.gray}${placeholder}${ANSI.reset}\n`);
+    output.write(`${sep}\n`);
+    output.write(`${status}\n`);
     const lineInput = (await rl.question(`${promptPlain}`)).trim();
-    output.write(`${sep}\n`);
-    output.write(`${status}\n\n`);
+    output.write("\n");
     return { lineInput, width };
   }
 
-  rl.pause();
   output.write(`${sep}\n`);
   output.write(`${promptColored}${ANSI.gray}${placeholder}${ANSI.reset}\n`);
   output.write(`${sep}\n`);
@@ -291,7 +295,6 @@ async function askInActiveBox(
   readline.moveCursor(output, 0, 3);
   readline.cursorTo(output, 0);
   output.write("\n");
-  rl.resume();
   return { lineInput: lineInput.trim(), width };
 }
 
@@ -384,12 +387,15 @@ export async function startCli(): Promise<void> {
   output.write(`${BANNER}\n`);
   renderCliFrame(config.llm.model, config.llm.provider, config.codexWorkdir);
 
-  const rl = readlinePromises.createInterface({
-    input,
-    output,
-    terminal: true,
-    completer: slashCommandCompleter,
-  });
+  const isTty = Boolean(process.stdout.isTTY && (input as NodeJS.ReadStream).isTTY);
+  const rl = isTty
+    ? null
+    : readlinePromises.createInterface({
+        input,
+        output,
+        terminal: true,
+        completer: slashCommandCompleter,
+      });
 
   try {
     while (true) {
@@ -560,6 +566,6 @@ export async function startCli(): Promise<void> {
       }
     }
   } finally {
-    rl.close();
+    rl?.close();
   }
 }
